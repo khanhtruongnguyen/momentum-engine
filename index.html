@@ -1,0 +1,1077 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>The Momentum Engine — Động cơ tập trung</title>
+  <meta name="description" content="Ứng dụng tập trung học tập với gamification, đặt cược, và mục tiêu dài hạn.">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- ═══════════ HEADER BAR ═══════════ -->
+  <header id="app-header">
+    <div class="header-left">
+      <span class="app-logo">⚡</span>
+      <h1 class="app-title">Momentum Engine</h1>
+    </div>
+    <div class="header-stats">
+      <div class="stat-item level-display" id="level-display">
+        <span class="stat-label">Cấp độ</span>
+        <span class="stat-value" id="player-level">1</span>
+      </div>
+      <div class="stat-item exp-display">
+        <span class="stat-label" id="exp-label">Kinh nghiệm</span>
+        <div class="exp-bar-container">
+          <div class="exp-bar" id="exp-bar" style="width:0%"></div>
+          <span class="exp-text" id="exp-text">0 / 100</span>
+        </div>
+      </div>
+      <div class="stat-item coin-display">
+        <span class="coin-icon">🪙</span>
+        <span class="stat-value" id="player-coins">0</span>
+        <span class="stat-label">Xu</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ═══════════ TAB NAVIGATION ═══════════ -->
+  <nav id="tab-nav">
+    <button class="tab-btn active" data-tab="study" id="tab-btn-study">
+      <span class="tab-icon">📚</span>
+      <span class="tab-label">Học tập</span>
+    </button>
+    <button class="tab-btn" data-tab="shop" id="tab-btn-shop">
+      <span class="tab-icon">🛒</span>
+      <span class="tab-label">Cửa hàng</span>
+    </button>
+    <button class="tab-btn" data-tab="goals" id="tab-btn-goals">
+      <span class="tab-icon">🎯</span>
+      <span class="tab-label">Mục tiêu</span>
+    </button>
+    <button class="tab-btn" data-tab="tasks" id="tab-btn-tasks">
+      <span class="tab-icon">✅</span>
+      <span class="tab-label">Nhiệm vụ</span>
+    </button>
+    <button class="tab-btn" data-tab="achievements" id="tab-btn-achievements">
+      <span class="tab-icon">🏆</span>
+      <span class="tab-label">Bằng khen</span>
+    </button>
+    <button class="tab-btn" data-tab="settings" id="tab-btn-settings">
+      <span class="tab-icon">⚙️</span>
+      <span class="tab-label">Cài đặt</span>
+    </button>
+  </nav>
+
+  <!-- ═══════════ MAIN CONTENT ═══════════ -->
+  <main id="tab-content">
+
+    <!-- ══════════════════════════════════════ -->
+    <!-- TAB 1 : HỌC TẬP                      -->
+    <!-- ══════════════════════════════════════ -->
+    <section id="tab-study" class="tab-panel active">
+
+      <!-- ── Setup Panel (no active session) ── -->
+      <div id="study-setup">
+        <div class="setup-grid">
+          <!-- Warmup Card -->
+          <div class="card warmup-card" id="warmup-card">
+            <div class="card-glow warmup-glow"></div>
+            <div class="card-header">
+              <span class="card-emoji">🔥</span>
+              <h2>Khởi động 5 phút</h2>
+            </div>
+            <p class="card-desc">Bắt đầu dễ dàng — không áp lực, không cược!</p>
+            <button id="btn-warmup" class="btn btn-warmup">
+              <span class="btn-icon">▶</span> Bắt đầu khởi động
+            </button>
+          </div>
+
+          <!-- Main Session Card — Buổi học lớn (Macro-session Pomodoro) -->
+          <div class="card session-card" id="session-card">
+            <div class="card-glow session-glow"></div>
+            <div class="card-header">
+              <span class="card-emoji">🎯</span>
+              <h2>Buổi học lớn</h2>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="session-target-total">Tổng thời gian mục tiêu (phút):</label>
+                <input type="number" id="session-target-total" min="25" max="720" value="360" step="5">
+              </div>
+              <div class="form-group">
+                <label for="session-chunk">Mỗi phiên nhỏ — Pomodoro (phút):</label>
+                <input type="number" id="session-chunk" min="5" max="60" value="25" step="5">
+              </div>
+            </div>
+
+            <div class="duration-presets" id="duration-presets">
+              <button class="preset-btn" data-mins="25">25p</button>
+              <button class="preset-btn" data-mins="50">50p</button>
+              <button class="preset-btn" data-mins="90">90p</button>
+              <button class="preset-btn" data-mins="120">2h</button>
+              <button class="preset-btn" data-mins="180">3h</button>
+              <button class="preset-btn" data-mins="240">4h</button>
+              <button class="preset-btn" data-mins="300">5h</button>
+              <button class="preset-btn" data-mins="360">6h</button>
+            </div>
+
+            <!-- Session Info Box -->
+            <div class="session-info-box" id="session-info-box">
+              <span>🍅</span>
+              Bạn sẽ có <strong id="chunk-count">15</strong> phiên × <strong id="chunk-duration-display">25</strong> phút, nghỉ 5p giữa mỗi phiên.
+            </div>
+
+            <!-- Betting -->
+            <div class="betting-section" id="betting-section">
+              <div class="betting-header">
+                <span>🎰</span>
+                <h3>Đặt cược (Tùy chọn)</h3>
+              </div>
+              <p class="bet-rules">Thắng (hoàn thành buổi) = <span class="text-green">+2× cược</span> &nbsp;|&nbsp; Thua (bỏ cuộc) = <span class="text-red">-10× cược</span></p>
+              <div class="bet-controls">
+                <label for="bet-amount">Xu đặt cược:</label>
+                <input type="number" id="bet-amount" min="0" value="0" step="1">
+                <span class="max-bet-info" id="max-bet-info">Tối đa: 10 Xu</span>
+              </div>
+            </div>
+
+            <button id="btn-start-session" class="btn btn-primary btn-large">
+              <span class="btn-icon">🚀</span> Bắt đầu buổi học
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Active Timer ── -->
+      <div id="study-active" class="hidden">
+        <div class="timer-container">
+          <!-- Block Progress Bar (Macro-session) -->
+          <div id="block-progress" class="block-progress hidden">
+            <div class="block-progress-header">
+              <span id="block-progress-label">Phiên 1 / 12</span>
+              <span id="block-progress-time">0 / 360 phút</span>
+            </div>
+            <div class="block-progress-bar-container">
+              <div class="block-progress-bar" id="block-progress-bar"></div>
+            </div>
+          </div>
+
+          <div class="timer-ring-wrapper">
+            <svg class="timer-svg" viewBox="0 0 220 220" id="timer-svg">
+              <defs>
+                <linearGradient id="timerGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" style="stop-color:#a855f7"/>
+                  <stop offset="100%" style="stop-color:#6366f1"/>
+                </linearGradient>
+              </defs>
+              <circle class="timer-bg-ring" cx="110" cy="110" r="100" />
+              <circle class="timer-progress-ring" id="timer-progress" cx="110" cy="110" r="100" />
+            </svg>
+            <div class="timer-center">
+              <span class="timer-type" id="timer-type">Khởi động</span>
+              <span class="timer-time" id="timer-time">05:00</span>
+              <span class="timer-status" id="timer-status"></span>
+            </div>
+          </div>
+
+          <div class="bet-active-display hidden" id="bet-active-display">
+            🎰 Đã cược: <strong id="bet-active-amount">0</strong> Xu
+          </div>
+
+          <div class="timer-controls">
+            <button id="btn-pause" class="btn btn-secondary btn-icon-text">
+              <span id="pause-icon">⏸</span>
+              <span id="pause-label">Tạm dừng</span>
+            </button>
+            <button id="btn-quit" class="btn btn-danger btn-icon-text">
+              <span>🏳️</span>
+              <span>Bỏ cuộc</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Break Timer ── -->
+      <div id="study-break" class="hidden">
+        <div class="break-container">
+          <div class="break-emoji" id="break-emoji">☕</div>
+          <h2 id="break-title">Nghỉ ngơi nào!</h2>
+          <span class="timer-time break-time" id="break-timer-time">05:00</span>
+
+          <!-- Break block progress -->
+          <div id="break-block-progress" class="break-block-progress">
+            <div class="break-block-progress-header">
+              <span id="break-block-label">Đã hoàn thành: 0 / 360 phút</span>
+            </div>
+            <div class="block-progress-bar-container">
+              <div class="block-progress-bar" id="break-block-bar"></div>
+            </div>
+          </div>
+
+          <!-- Actions during countdown -->
+          <div id="break-actions" class="break-actions-group">
+            <button id="btn-skip-break" class="btn btn-secondary">Bỏ qua nghỉ ➜</button>
+            <button id="btn-quit-break" class="btn btn-danger btn-small">🏳️ Bỏ cuộc</button>
+          </div>
+
+          <!-- Actions when break is done -->
+          <div id="break-done-actions" class="break-actions-group hidden">
+            <button id="btn-start-next-chunk" class="btn btn-primary btn-large">
+              <span class="btn-icon">🚀</span> Bắt đầu phiên tiếp theo
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Retrospective Modal ── -->
+      <div id="retrospective-modal" class="modal-overlay hidden">
+        <div class="modal-content retro-modal">
+          <div class="retro-celebration">🎉</div>
+          <h2>Hoàn thành xuất sắc!</h2>
+          <div class="session-results" id="session-results"></div>
+          <div class="form-group">
+            <label for="retro-notes">📝 Ghi chú phiên học:</label>
+            <textarea id="retro-notes" rows="3" placeholder="Hôm nay bạn đã học được gì? Cảm thấy thế nào?"></textarea>
+          </div>
+          <button id="btn-save-retro" class="btn btn-primary btn-large">💾 Lưu & Tiếp tục</button>
+        </div>
+      </div>
+
+      <!-- ── Analytics ── -->
+      <div class="card analytics-card" id="analytics-card">
+        <div class="analytics-header">
+          <div class="card-header" style="margin-bottom:0">
+            <span class="card-emoji">📊</span>
+            <h2>Thống kê</h2>
+          </div>
+          <div class="stat-mode-toggle">
+            <button class="stat-mode-btn active" id="stat-btn-week" data-mode="week">📅 Tuần</button>
+            <button class="stat-mode-btn" id="stat-btn-quarter" data-mode="quarter">🗓️ Quý</button>
+          </div>
+        </div>
+
+        <!-- Week view -->
+        <div id="stat-view-week">
+          <div class="stat-period-label" id="stat-week-label">Tuần này</div>
+          <div class="chart-wrapper">
+            <canvas id="weekly-chart" width="700" height="220"></canvas>
+          </div>
+          <div class="stat-summary-row" id="stat-week-summary"></div>
+        </div>
+
+        <!-- Quarter view -->
+        <div id="stat-view-quarter" class="hidden">
+          <div class="stat-period-label" id="stat-quarter-year-label">Năm 2026</div>
+          <div class="quarter-grid">
+            <div class="quarter-panel" id="qpanel-1">
+              <div class="quarter-panel-header">
+                <span class="quarter-label q1-label">Q1</span>
+                <span class="quarter-months">Tháng 1 – 3</span>
+                <span class="quarter-total" id="q1-total">0h</span>
+              </div>
+              <div class="quarter-chart-wrap">
+                <canvas id="quarter-chart-1" height="120"></canvas>
+              </div>
+            </div>
+            <div class="quarter-panel" id="qpanel-2">
+              <div class="quarter-panel-header">
+                <span class="quarter-label q2-label">Q2</span>
+                <span class="quarter-months">Tháng 4 – 6</span>
+                <span class="quarter-total" id="q2-total">0h</span>
+              </div>
+              <div class="quarter-chart-wrap">
+                <canvas id="quarter-chart-2" height="120"></canvas>
+              </div>
+            </div>
+            <div class="quarter-panel" id="qpanel-3">
+              <div class="quarter-panel-header">
+                <span class="quarter-label q3-label">Q3</span>
+                <span class="quarter-months">Tháng 7 – 9</span>
+                <span class="quarter-total" id="q3-total">0h</span>
+              </div>
+              <div class="quarter-chart-wrap">
+                <canvas id="quarter-chart-3" height="120"></canvas>
+              </div>
+            </div>
+            <div class="quarter-panel" id="qpanel-4">
+              <div class="quarter-panel-header">
+                <span class="quarter-label q4-label">Q4</span>
+                <span class="quarter-months">Tháng 10 – 12</span>
+                <span class="quarter-total" id="q4-total">0h</span>
+              </div>
+              <div class="quarter-chart-wrap">
+                <canvas id="quarter-chart-4" height="120"></canvas>
+              </div>
+            </div>
+          </div>
+          <div class="stat-summary-row" id="stat-quarter-summary"></div>
+        </div>
+
+        <div class="card-header history-header">
+          <span class="card-emoji">📜</span>
+          <h2>Lịch sử phiên học</h2>
+        </div>
+        <div id="session-history" class="session-history-list">
+          <p class="empty-state">Chưa có phiên học nào. Bắt đầu ngay!</p>
+        </div>
+      </div>
+    </section>
+
+
+    <!-- ══════════════════════════════════════ -->
+    <!-- TAB 2 : CỬA HÀNG                     -->
+    <!-- ══════════════════════════════════════ -->
+    <section id="tab-shop" class="tab-panel hidden">
+      <!-- Passive Upgrade -->
+      <div class="card shop-card" id="passive-upgrade-card">
+        <div class="card-glow shop-glow"></div>
+        <div class="card-header">
+          <span class="card-emoji">⚡</span>
+          <h2>Nâng cấp Xu thụ động</h2>
+        </div>
+        <p class="card-desc">Mỗi lần nâng cấp tăng <strong>+10%</strong> Xu kiếm được. Tối đa 20 lần (+200%).</p>
+        <div class="upgrade-visual">
+          <div class="upgrade-level-badge" id="passive-upgrade-level">0 / 20</div>
+          <div class="upgrade-bar-container">
+            <div class="upgrade-bar" id="passive-upgrade-bar" style="width:0%"></div>
+          </div>
+          <div class="upgrade-bonus" id="passive-upgrade-bonus">+0% bonus</div>
+        </div>
+        <button id="btn-buy-passive" class="btn btn-primary">🛒 Mua nâng cấp — 500 Xu</button>
+      </div>
+
+      <!-- Rest Passes Shop -->
+      <div class="card shop-card" id="rest-passes-card">
+        <div class="card-header">
+          <span class="card-emoji">🎫</span>
+          <h2>Vé nghỉ ngơi</h2>
+        </div>
+        <div class="passes-grid">
+          <div class="pass-shop-item">
+            <div class="pass-icon">☕</div>
+            <h3>Vé nghỉ 45 phút</h3>
+            <p>Nghỉ ngơi hợp lệ không bị phạt</p>
+            <button id="btn-buy-45" class="btn btn-accent">Mua — 100 Xu</button>
+          </div>
+          <div class="pass-shop-item">
+            <div class="pass-icon">🛏️</div>
+            <h3>Vé nghỉ 3 giờ</h3>
+            <p>Nghỉ ngơi dài, xứng đáng!</p>
+            <button id="btn-buy-3h" class="btn btn-accent">Mua — 350 Xu</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Inventory -->
+      <div class="card shop-card" id="inventory-card">
+        <div class="card-header">
+          <span class="card-emoji">🎒</span>
+          <h2>Kho đồ</h2>
+        </div>
+        <div id="inventory-list" class="inventory-list">
+          <p class="empty-state">Kho đồ trống — hãy mua vé nghỉ ngơi!</p>
+        </div>
+      </div>
+
+      <!-- Penalty Tickets -->
+      <div class="card shop-card penalty-card" id="penalty-card">
+        <div class="card-glow penalty-glow"></div>
+        <div class="card-header">
+          <span class="card-emoji">🚨</span>
+          <h2>Phiếu phạt — Chơi bẩn</h2>
+        </div>
+        <p class="card-desc">Đã nghỉ ngơi hoặc chơi bời mà <strong>không mua vé</strong>? Khai báo trung thực và nộp phạt. Phiếu quá hạn 5 ngày sẽ bị <span class="text-red">hạ 1 cấp</span>!</p>
+
+        <!-- Create ticket form -->
+        <div class="penalty-form">
+          <div class="penalty-form-row">
+            <div class="form-group" style="flex:1; margin-bottom:0">
+              <label for="dirty-mins-input">Số phút đã chơi bẩn:</label>
+              <input type="number" id="dirty-mins-input" min="1" placeholder="VD: 60" step="1">
+            </div>
+            <div class="fine-preview-block">
+              <span class="fine-preview-label">Tiền phạt</span>
+              <span class="fine-preview-amount" id="fine-preview">— Xu</span>
+            </div>
+          </div>
+          <button id="btn-create-penalty" class="btn btn-danger btn-large" style="margin-top:14px">
+            <span class="btn-icon">📋</span> Tạo phiếu phạt
+          </button>
+        </div>
+
+        <!-- Ticket list -->
+        <div id="penalty-list" class="penalty-list">
+          <p class="empty-state">Chưa có phiếu phạt nào. Chơi sạch nhé! 😇</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══════════════════════════════════════ -->
+    <!-- TAB 3 : MỤC TIÊU DÀI HẠN            -->
+    <!-- ══════════════════════════════════════ -->
+    <section id="tab-goals" class="tab-panel hidden">
+      <div class="goals-header-bar">
+        <button id="btn-new-goal" class="btn btn-primary btn-large">
+          <span class="btn-icon">➕</span> Tạo mục tiêu mới
+        </button>
+        <button id="btn-new-daily-bet" class="btn btn-daily-bet btn-large">
+          <span class="btn-icon">📅</span> Phếu cược ngày
+        </button>
+      </div>
+
+      <!-- Active Contracts -->
+      <div class="card goals-card" id="active-goals-card">
+        <div class="card-header">
+          <span class="card-emoji">🔥</span>
+          <h2>Mục tiêu đang thực hiện</h2>
+        </div>
+        <div id="active-contracts" class="contracts-list">
+          <p class="empty-state">Chưa có mục tiêu nào — tạo ngay để cam kết!</p>
+        </div>
+      </div>
+
+      <!-- Completed Contracts -->
+      <div class="card goals-card" id="completed-goals-card">
+        <div class="card-header">
+          <span class="card-emoji">✅</span>
+          <h2>Mục tiêu đã hoàn thành</h2>
+        </div>
+        <div id="completed-contracts" class="contracts-list">
+          <p class="empty-state">Chưa có mục tiêu hoàn thành</p>
+        </div>
+      </div>
+
+      <!-- Daily Study Bets -->
+      <div class="card goals-card daily-bets-card" id="daily-bets-card">
+        <div class="card-glow daily-bet-glow"></div>
+        <div class="card-header">
+          <span class="card-emoji">📅</span>
+          <h2>Phếu cược ngày</h2>
+        </div>
+        <p class="card-desc daily-bet-intro">
+          🎯 Đặt cược rằng bạn sẽ học đủ số giờ hôm nay.
+          Hệ thống tự đối chiếu tổng thời gian học vào cuối ngày và đưa ra kết quả!
+        </p>
+        <div id="daily-bets-list" class="daily-bets-list">
+          <p class="empty-state">Chưa có phiếu cược ngày nào. Tạo ngay để thách thức bản thân!</p>
+        </div>
+      </div>
+      <div id="goal-modal" class="modal-overlay hidden">
+        <div class="modal-content goal-modal">
+          <h2>🎯 Tạo mục tiêu mới</h2>
+          <div class="form-group">
+            <label for="goal-name">Tên mục tiêu:</label>
+            <input type="text" id="goal-name" placeholder="VD: Hoàn thành khóa học React">
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="goal-start">Ngày bắt đầu:</label>
+              <input type="date" id="goal-start">
+            </div>
+            <div class="form-group">
+              <label for="goal-end">Ngày kết thúc:</label>
+              <input type="date" id="goal-end">
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="goal-stake">Tổng Xu đặt cược:</label>
+            <input type="number" id="goal-stake" min="1" value="100">
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="goal-win-mult">Hệ số thắng (×):</label>
+              <input type="number" id="goal-win-mult" min="1" step="0.5" value="2">
+            </div>
+            <div class="form-group">
+              <label for="goal-loss-mult">Hệ số thua (×):</label>
+              <input type="number" id="goal-loss-mult" min="1" step="0.5" value="3">
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="goal-payment-type">Hình thức thanh toán:</label>
+            <select id="goal-payment-type">
+              <option value="upfront">💰 Trả trước toàn bộ</option>
+              <option value="daily">📅 Trả góp hàng ngày</option>
+            </select>
+          </div>
+          <div id="daily-info" class="daily-info hidden">
+            <p>💡 Bạn cần check-in mỗi ngày. Bỏ lỡ 1 ngày = mục tiêu THẤT BẠI!</p>
+            <p id="daily-stake-preview">Xu mỗi ngày: —</p>
+          </div>
+          <div class="modal-actions">
+            <button id="btn-cancel-goal" class="btn btn-secondary">Hủy</button>
+            <button id="btn-create-goal" class="btn btn-primary">✅ Tạo mục tiêu</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Daily Bet Creation Modal -->
+      <div id="daily-bet-modal" class="modal-overlay hidden">
+        <div class="modal-content daily-bet-modal-content">
+          <div class="daily-bet-modal-header">
+            <span class="daily-bet-modal-icon">📅</span>
+            <h2>Phiếu cược ngày</h2>
+          </div>
+          <p class="daily-bet-modal-desc">Hệ thống tự kiểm tra tổng giờ học vào cuối ngày và đưa ra kết quả!</p>
+
+          <div class="daily-bet-for-date">
+            <span>📅</span> Cược cho ngày: <strong id="daily-bet-date-display">--/--/----</strong>
+          </div>
+
+          <div class="form-group">
+            <label for="daily-bet-target-hrs">🎯 Mục tiêu học (giờ):</label>
+            <input type="number" id="daily-bet-target-hrs" min="0.5" max="24" step="0.5" value="5">
+            <p class="settings-hint">= <span id="daily-bet-mins-preview">300</span> phút</p>
+          </div>
+
+          <div class="form-group">
+            <label for="daily-bet-stake">💰 Xu đặt cược:</label>
+            <input type="number" id="daily-bet-stake" min="1" value="50">
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label for="daily-bet-win-mult">🏆 Hệ số thắng (×):</label>
+              <input type="number" id="daily-bet-win-mult" min="1" step="0.5" value="2">
+            </div>
+            <div class="form-group">
+              <label for="daily-bet-loss-mult">💔 Hệ số thua (×):</label>
+              <input type="number" id="daily-bet-loss-mult" min="1" step="0.5" value="3">
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="daily-bet-payment-type">💳 Hình thức thanh toán:</label>
+            <select id="daily-bet-payment-type">
+              <option value="upfront">💰 Trả trước (trừ Xu ngay khi tạo)</option>
+              <option value="deferred">📅 Trả sau khi kết thúc ngày</option>
+            </select>
+          </div>
+
+          <div id="daily-bet-upfront-info" class="daily-info">
+            <p>💸 Sẽ trừ ngay <strong><span id="daily-bet-upfront-amount">50</span> Xu</strong> khi tạo phiếu.</p>
+          </div>
+
+          <div class="daily-bet-preview-box">
+            <div class="daily-bet-preview-row">
+              <span>🏆 Thắng (đủ mục tiêu):</span>
+              <span class="positive" id="daily-bet-win-preview">+100 Xu</span>
+            </div>
+            <div class="daily-bet-preview-row">
+              <span>💔 Thua (không đủ mục tiêu):</span>
+              <span class="negative" id="daily-bet-loss-preview">−150 Xu</span>
+            </div>
+          </div>
+
+          <div class="modal-actions">
+            <button id="btn-cancel-daily-bet" class="btn btn-secondary">Hủy</button>
+            <button id="btn-create-daily-bet" class="btn btn-daily-bet btn-large">📅 Tạo phiếu cược</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+
+    <!-- ══════════════════════════════════════ -->
+    <!-- TAB 5 : NHIỆM VỤ (TASKS)               -->
+    <!-- ══════════════════════════════════════ -->
+    <section id="tab-tasks" class="tab-panel hidden">
+      <div class="tasks-header-bar">
+        <button id="btn-new-task" class="btn btn-task btn-large">
+          <span class="btn-icon">➕</span> Tạo nhiệm vụ mới
+        </button>
+      </div>
+
+      <div class="card tasks-main-card" id="tasks-card">
+        <div class="card-glow tasks-glow"></div>
+        <div class="card-header">
+          <span class="card-emoji">✅</span>
+          <h2>Nhiệm vụ</h2>
+        </div>
+        <p class="card-desc tasks-intro">⏱️ Tạo nhiệm vụ với phần thưởng / tiền phạt và đồng hồ đếm ngược. Hoàn thành trước khi hết giờ để nhận thưởng!</p>
+        <div id="tasks-list" class="tasks-list">
+          <p class="empty-state">Chưa có nhiệm vụ nào. Tạo ngay để bắt đầu!</p>
+        </div>
+      </div>
+
+      <!-- Task Creation Modal -->
+      <div id="task-modal" class="modal-overlay hidden">
+        <div class="modal-content task-modal-content">
+          <div class="task-modal-header">
+            <span class="task-modal-icon">✅</span>
+            <h2>Tạo nhiệm vụ mới</h2>
+          </div>
+          <p class="task-modal-desc">Nhiệm vụ sẽ tự động thất bại nếu hết giờ mà chưa hoàn thành!</p>
+
+          <div class="task-modal-body">
+            <div class="form-group">
+              <label for="task-title">📝 Tên nhiệm vụ:</label>
+              <input type="text" id="task-title" placeholder="VD: Hoàn thành bài tập Toán">
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="task-reward">🎁 Thưởng nếu xong (Xu):</label>
+                <input type="number" id="task-reward" min="0" value="20">
+              </div>
+              <div class="form-group">
+                <label for="task-penalty">⚠️ Phạt nếu hết giờ (Xu):</label>
+                <input type="number" id="task-penalty" min="0" value="50">
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label>⏱️ Thời gian đếm ngược:</label>
+              <div class="task-time-inputs">
+                <div class="task-time-field">
+                  <input type="number" id="task-hours" min="0" max="23" value="1">
+                  <span class="task-time-label">giờ</span>
+                </div>
+                <span class="task-time-sep">:</span>
+                <div class="task-time-field">
+                  <input type="number" id="task-minutes" min="0" max="59" value="0">
+                  <span class="task-time-label">phút</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="task-preview-box">
+              <div class="task-preview-row">
+                <span>✅ Hoàn thành trước giờ:</span>
+                <span class="positive" id="task-preview-win">+20 Xu</span>
+              </div>
+              <div class="task-preview-row">
+                <span>⏰ Hết giờ chưa xong:</span>
+                <span class="negative" id="task-preview-loss">−50 Xu</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="modal-actions">
+            <button id="btn-cancel-task" class="btn btn-secondary">Hủy</button>
+            <button id="btn-create-task" class="btn btn-task btn-large">✅ Tạo nhiệm vụ</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+
+    <!-- ════════════════════════════════════════ -->
+    <!-- TAB 6 : THÀNH TÍCH / BẰNG KHEN          -->
+    <!-- ════════════════════════════════════════ -->
+    <section id="tab-achievements" class="tab-panel hidden">
+
+      <div class="ach-header-bar">
+        <div class="ach-header-left">
+          <h2 class="ach-headline">🏆 Phòng Vinh Danh</h2>
+          <p class="ach-subtitle">Lưu lại mọi chiến tích và dấu ấn đáng nhớ trong hành trình học tập</p>
+        </div>
+        <button id="btn-new-achievement" class="btn btn-achievement btn-large">
+          <span class="btn-icon">🏆</span> Tạo bằng khen
+        </button>
+      </div>
+
+      <div id="achievements-gallery" class="achievements-gallery">
+        <div class="ach-empty">
+          <div class="ach-empty-icon">🏆</div>
+          <p>Chưa có bằng khen nào.<br>Tạo ngay để lưu lại chiến tích!</p>
+        </div>
+      </div>
+
+      <!-- ─ Creation Modal ─ -->
+      <div id="achievement-modal" class="modal-overlay hidden">
+        <div class="modal-content ach-create-modal">
+          <div class="ach-cm-header">
+            <span class="ach-cm-icon">🏆</span>
+            <div>
+              <h2>Tạo bằng khen</h2>
+              <p>Ghi dấu chiến tích của bạn vào lịch sử!</p>
+            </div>
+          </div>
+
+          <div class="ach-cm-body">
+            <div class="form-group">
+              <label>Icon đại diện:</label>
+              <div class="emoji-picker-wrap">
+                <input type="text" id="ach-emoji" class="emoji-main-input" value="🏆" maxlength="4">
+                <div class="emoji-presets">
+                  <span class="ep" onclick="document.getElementById('ach-emoji').value=this.textContent;updateAchPreview()">🏆</span>
+                  <span class="ep" onclick="document.getElementById('ach-emoji').value=this.textContent;updateAchPreview()">🥇</span>
+                  <span class="ep" onclick="document.getElementById('ach-emoji').value=this.textContent;updateAchPreview()">🎖️</span>
+                  <span class="ep" onclick="document.getElementById('ach-emoji').value=this.textContent;updateAchPreview()">🌟</span>
+                  <span class="ep" onclick="document.getElementById('ach-emoji').value=this.textContent;updateAchPreview()">⭐</span>
+                  <span class="ep" onclick="document.getElementById('ach-emoji').value=this.textContent;updateAchPreview()">🔥</span>
+                  <span class="ep" onclick="document.getElementById('ach-emoji').value=this.textContent;updateAchPreview()">⚡</span>
+                  <span class="ep" onclick="document.getElementById('ach-emoji').value=this.textContent;updateAchPreview()">🎯</span>
+                  <span class="ep" onclick="document.getElementById('ach-emoji').value=this.textContent;updateAchPreview()">💪</span>
+                  <span class="ep" onclick="document.getElementById('ach-emoji').value=this.textContent;updateAchPreview()">🧠</span>
+                  <span class="ep" onclick="document.getElementById('ach-emoji').value=this.textContent;updateAchPreview()">📚</span>
+                  <span class="ep" onclick="document.getElementById('ach-emoji').value=this.textContent;updateAchPreview()">🚀</span>
+                  <span class="ep" onclick="document.getElementById('ach-emoji').value=this.textContent;updateAchPreview()">👑</span>
+                  <span class="ep" onclick="document.getElementById('ach-emoji').value=this.textContent;updateAchPreview()">💎</span>
+                  <span class="ep" onclick="document.getElementById('ach-emoji').value=this.textContent;updateAchPreview()">✨</span>
+                  <span class="ep" onclick="document.getElementById('ach-emoji').value=this.textContent;updateAchPreview()">🌈</span>
+                  <span class="ep" onclick="document.getElementById('ach-emoji').value=this.textContent;updateAchPreview()">🎓</span>
+                  <span class="ep" onclick="document.getElementById('ach-emoji').value=this.textContent;updateAchPreview()">🦅</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label for="ach-title">Tên thành tích:</label>
+              <input type="text" id="ach-title" placeholder="VD: Chiến binh 100 ngày học" oninput="updateAchPreview()">
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="ach-level">Cấp bằng:</label>
+                <select id="ach-level" onchange="updateAchPreview()">
+                  <option value="bronze">🥉 Đồng</option>
+                  <option value="silver">🥈 Bạc</option>
+                  <option value="gold" selected>🥇 Vàng</option>
+                  <option value="platinum">💎 Bạch kim</option>
+                  <option value="legend">👑 Huyền thoại</option>
+                  <option value="supreme">♛ Tối thượng</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="ach-category">Danh mục:</label>
+                <select id="ach-category">
+                  <option value="study">📚 Học tập</option>
+                  <option value="streak">🔥 Streak</option>
+                  <option value="milestone">🎯 Cột mốc</option>
+                  <option value="challenge">⚡ Thử thách</option>
+                  <option value="special">✨ Đặc biệt</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="ach-date">📅 Ngày đạt được:</label>
+                <input type="date" id="ach-date">
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label for="ach-description">Mô tả:</label>
+              <textarea id="ach-description" rows="2"
+                placeholder="Ghi lại câu chuyện đằng sau thành tích này..." oninput="updateAchPreview()"></textarea>
+            </div>
+
+            <div class="form-group">
+              <label>Chỉ số nổi bật (tùy chọn):</label>
+              <div class="ach-stats-inputs">
+                <div class="ach-stat-row">
+                  <input type="text" class="ach-stat-label" placeholder="VD: Tổng giờ học">
+                  <input type="text" class="ach-stat-value" placeholder="VD: 150h">
+                </div>
+                <div class="ach-stat-row">
+                  <input type="text" class="ach-stat-label" placeholder="VD: Ngày streak">
+                  <input type="text" class="ach-stat-value" placeholder="VD: 30">
+                </div>
+                <div class="ach-stat-row">
+                  <input type="text" class="ach-stat-label" placeholder="VD: Nhiệm vụ hoàn thành">
+                  <input type="text" class="ach-stat-value" placeholder="VD: 45">
+                </div>
+              </div>
+            </div>
+
+            <div class="ach-preview-label">✦ Xem trước bằng khen ✦</div>
+            <div id="ach-live-preview" class="ach-live-preview"></div>
+          </div>
+
+          <div class="modal-actions">
+            <button id="btn-cancel-achievement" class="btn btn-secondary">Hủy</button>
+            <button id="btn-create-achievement" class="btn btn-achievement btn-large">🏆 Cấp bằng khen</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ─ Full Diploma View Modal ─ -->
+      <div id="achievement-view-modal" class="modal-overlay hidden" onclick="closeAchievementView(event)">
+        <div class="cert-diploma-wrapper" onclick="event.stopPropagation()">
+          <div class="cert-diploma-actions">
+            <button class="cert-action-btn cert-delete-btn" id="cert-view-delete-btn" title="Xóa bằng khen">🗑️</button>
+            <button class="cert-action-btn cert-close-btn" onclick="closeAchievementViewDirect()" title="Đóng">✕</button>
+          </div>
+          <div id="cert-diploma-inner"></div>
+        </div>
+      </div>
+
+    </section>
+
+
+    <!-- ══════════════════════════════════════ -->
+    <!-- TAB 4 : CÀI ĐẶT / GIST SYNC          -->
+    <!-- ══════════════════════════════════════ -->
+    <section id="tab-settings" class="tab-panel hidden">
+
+      <!-- Status banner -->
+      <div class="sync-status-banner" id="gist-sync-banner">
+        <span class="sync-banner-icon" id="gist-header-icon" title="Chưa đồng bộ">☁️</span>
+        <span class="sync-status" id="gist-sync-status">Chưa cấu hình đồng bộ</span>
+      </div>
+
+      <!-- Sound Settings Card -->
+      <div class="card settings-card sound-settings-card">
+        <div class="card-header">
+          <span class="card-emoji">🔊</span>
+          <h2>Cài đặt âm thanh</h2>
+        </div>
+        <p class="card-desc">Bật/tắt âm thanh và điều chỉnh âm lượng cho các hiệu ứng trong game.</p>
+
+        <div class="sound-controls">
+          <div class="sound-toggle-row">
+            <span class="sound-toggle-label-text">Âm thanh:</span>
+            <button id="sound-toggle-btn" class="btn btn-icon sound-toggle-btn" title="Bật/tắt âm thanh">🔊</button>
+            <span id="sound-toggle-label" class="sound-state-label">Bật</span>
+          </div>
+
+          <div class="sound-volume-row">
+            <span class="sound-vol-label">🔈</span>
+            <input
+              type="range"
+              id="sound-volume-slider"
+              min="0" max="1" step="0.05"
+              value="0.55"
+              class="sound-volume-slider"
+            >
+            <span class="sound-vol-label">🔊</span>
+            <span id="sound-volume-pct" class="sound-vol-pct">55%</span>
+          </div>
+
+          <button id="btn-test-sound" class="btn btn-secondary btn-small sound-test-btn">
+            ▶ Thử âm thanh
+          </button>
+        </div>
+      </div>
+
+      <!-- Edit Mode Card -->
+      <div class="card settings-card edit-mode-card">
+        <div class="card-glow edit-mode-glow"></div>
+        <div class="card-header">
+          <span class="card-emoji">✏️</span>
+          <h2>Chế độ chỉnh sửa</h2>
+        </div>
+        <p class="card-desc">Chỉnh sửa thủ công số Xu, phiếu cược đang chờ, và tổng thời gian học hôm nay.</p>
+        <button id="btn-open-edit-mode" class="btn btn-accent btn-large">
+          <span class="btn-icon">✏️</span> Mở chế độ chỉnh sửa
+        </button>
+      </div>
+
+      <!-- Current state -->
+      <div class="card settings-card">
+        <div class="card-header">
+          <span class="card-emoji">📡</span>
+          <h2>Trạng thái đồng bộ</h2>
+        </div>
+        <p id="gist-configured-info" class="gist-configured-info gist-info--warn">
+          ⚠️ Chưa cấu hình — nhập token và Gist ID bên dưới.
+        </p>
+        <div class="sync-action-row">
+          <button id="btn-sync-now" class="btn btn-primary">
+            <span>🔄</span> Tải từ Gist (Pull)
+          </button>
+          <button id="btn-push-now" class="btn btn-secondary">
+            <span>⬆️</span> Đẩy lên Gist (Push)
+          </button>
+        </div>
+      </div>
+
+      <!-- Config form -->
+      <div class="card settings-card">
+        <div class="card-header">
+          <span class="card-emoji">🔑</span>
+          <h2>Cấu hình GitHub Gist</h2>
+        </div>
+
+        <div class="settings-field-group">
+          <label for="gist-token-input">GitHub Personal Access Token</label>
+          <div class="token-input-row">
+            <input
+              type="password"
+              id="gist-token-input"
+              class="settings-input"
+              placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
+              autocomplete="off"
+              spellcheck="false"
+            >
+            <button id="btn-toggle-token" class="btn btn-icon btn-secondary">👁 Hiện</button>
+          </div>
+          <p class="settings-hint">Tạo tại <a href="https://github.com/settings/tokens" target="_blank" rel="noopener">github.com/settings/tokens</a> → chọn scope <code>gist</code>.</p>
+        </div>
+
+        <div class="settings-field-group">
+          <label for="gist-id-input">Gist ID</label>
+          <div class="gist-id-row">
+            <input
+              type="text"
+              id="gist-id-input"
+              class="settings-input"
+              placeholder="Để trống và bấm &quot;Tạo Gist mới&quot; nếu chưa có"
+              autocomplete="off"
+              spellcheck="false"
+            >
+            <button id="btn-create-gist" class="btn btn-accent">✨ Tạo Gist mới</button>
+          </div>
+          <p class="settings-hint">Gist ID là chuỗi dài trong URL: <code>gist.github.com/&lt;user&gt;/<strong>GIST_ID</strong></code></p>
+        </div>
+
+        <button id="btn-save-gist-settings" class="btn btn-primary btn-large" style="margin-top: 8px">
+          💾 Lưu cài đặt &amp; Đồng bộ
+        </button>
+      </div>
+
+      <!-- Instructions -->
+      <div class="card settings-card settings-guide">
+        <div class="card-header">
+          <span class="card-emoji">📖</span>
+          <h2>Hướng dẫn sử dụng nhiều thiết bị</h2>
+        </div>
+        <ol class="guide-steps">
+          <li>
+            <strong>Tạo token</strong>: Vào
+            <a href="https://github.com/settings/tokens" target="_blank" rel="noopener">GitHub Settings → Tokens</a>,
+            bấm <em>Generate new token (classic)</em>, chọn scope <code>gist</code>, sao chép token.
+          </li>
+          <li>
+            <strong>Thiết bị đầu tiên</strong>: Dán token vào ô trên → bấm <em>✨ Tạo Gist mới</em>
+            → Gist ID tự điền → bấm <em>💾 Lưu cài đặt</em>.
+          </li>
+          <li>
+            <strong>Thiết bị khác</strong>: Mở app, vào tab ⚙️ Cài đặt, dán <strong>cùng token</strong>
+            và <strong>cùng Gist ID</strong> → bấm <em>💾 Lưu cài đặt</em>. Dữ liệu sẽ tự tải về.
+          </li>
+          <li>
+            <strong>Tự động đồng bộ</strong>: Mỗi khi bạn chuyển về tab trình duyệt sau khi dùng
+            thiết bị khác, app sẽ tự pull dữ liệu mới nhất. Chiến lược <em>Last-write-wins</em>
+            — thiết bị nào ghi sau thắng.
+          </li>
+        </ol>
+        <div class="guide-warning">
+          🔒 <strong>Bảo mật</strong>: Token được lưu trong localStorage của trình duyệt.
+          Không dùng trên máy tính công cộng hoặc chia sẻ thiết bị với người khác khi đã lưu token.
+        </div>
+      </div>
+
+      <!-- Data Management Card -->
+      <div class="card settings-card data-mgmt-card">
+        <div class="card-header">
+          <span class="card-emoji">🗂️</span>
+          <h2>Quản lý dữ liệu</h2>
+        </div>
+        <p class="card-desc">Xóa từng loại dữ liệu riêng lẻ (có xác nhận).</p>
+        <div class="data-mgmt-grid">
+          <button class="btn btn-danger-soft" id="btn-clear-sessions">
+            <span>📜</span> Xóa lịch sử phiên học
+          </button>
+          <button class="btn btn-danger-soft" id="btn-clear-penalties">
+            <span>🚨</span> Xóa phiếu phạt
+          </button>
+          <button class="btn btn-danger-soft" id="btn-clear-daily-bets">
+            <span>📅</span> Xóa phiếu cược ngày
+          </button>
+          <button class="btn btn-danger-soft" id="btn-clear-tasks-done">
+            <span>✅</span> Xóa nhiệm vụ đã kết thúc
+          </button>
+          <button class="btn btn-danger-soft" id="btn-clear-goals">
+            <span>🎯</span> Xóa mục tiêu dài hạn
+          </button>
+        </div>
+      </div>
+
+      <!-- Reset Data Card -->
+      <div class="card settings-card reset-danger-card">
+        <div class="card-glow reset-glow"></div>
+        <div class="card-header">
+          <span class="card-emoji">🗑️</span>
+          <h2>Xóa dữ liệu</h2>
+        </div>
+        <p class="card-desc reset-warn-text">⚠️ Thao tác này sẽ <strong>xóa vĩnh viễn toàn bộ dữ liệu</strong> — cấp độ, Xu, phiên học, mục tiêu, phiếu phạt, vé nghỉ. Không thể khôi phục!</p>
+        <button id="btn-reset-data" class="btn btn-danger btn-large btn-reset">
+          <span class="btn-icon">🗑️</span> Reset toàn bộ dữ liệu
+        </button>
+      </div>
+
+    </section>
+  </main>
+
+  <!-- ═══════════ TOAST CONTAINER ═══════════ -->
+  <div id="toast-container"></div>
+
+  <!-- ═══════════ CONFIRM MODAL ═══════════ -->
+  <div id="confirm-modal" class="modal-overlay hidden">
+    <div class="modal-content confirm-modal">
+      <h2 id="confirm-title">Xác nhận</h2>
+      <p id="confirm-message"></p>
+      <div class="modal-actions">
+        <button id="confirm-cancel" class="btn btn-secondary">Hủy</button>
+        <button id="confirm-ok" class="btn btn-danger">Xác nhận</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════ EDIT MODE MODAL ═══════════ -->
+  <div id="edit-mode-modal" class="modal-overlay hidden">
+    <div class="modal-content edit-modal">
+      <div class="edit-modal-header">
+        <span class="edit-modal-icon">✏️</span>
+        <h2>Chế độ chỉnh sửa</h2>
+      </div>
+      <p class="edit-modal-desc">Chỉnh sửa trực tiếp các giá trị trong game. Thay đổi sẽ được lưu ngay khi bấm <strong>Lưu</strong>.</p>
+
+      <!-- Coins -->
+      <div class="edit-section">
+        <div class="edit-section-header">
+          <span>🪙</span>
+          <h3>Số Xu hiện tại</h3>
+        </div>
+        <div class="edit-field-row">
+          <input type="number" id="edit-coins" class="settings-input" step="1" placeholder="Số Xu">
+          <span class="edit-unit">Xu</span>
+        </div>
+        <p class="settings-hint">Có thể nhập số âm nếu muốn trừ nợ.</p>
+      </div>
+
+      <!-- Active Bet -->
+      <div class="edit-section">
+        <div class="edit-section-header">
+          <span>🎰</span>
+          <h3>Phiếu cược đang chờ</h3>
+        </div>
+        <div id="edit-bet-wrapper">
+          <div class="edit-field-row">
+            <input type="number" id="edit-bet-amount" class="settings-input" min="0" step="1" placeholder="0">
+            <span class="edit-unit">Xu cược</span>
+          </div>
+          <p class="settings-hint" id="edit-bet-hint">Chỉnh số Xu đặt cược trong buổi học đang chạy / đang chờ.</p>
+          <p class="edit-no-bet hidden" id="edit-no-bet">Hiện không có buổi học hoặc cược nào đang chạy.</p>
+        </div>
+      </div>
+
+      <!-- Today study time -->
+      <div class="edit-section">
+        <div class="edit-section-header">
+          <span>⏱️</span>
+          <h3>Tổng thời gian học hôm nay</h3>
+        </div>
+        <div class="edit-field-row">
+          <input type="number" id="edit-today-mins" class="settings-input" min="0" step="1" placeholder="0">
+          <span class="edit-unit">phút</span>
+        </div>
+        <p class="settings-hint">Tổng phút học được ghi nhận trong ngày hôm nay (chỉnh sẽ cập nhật các phiên học).</p>
+      </div>
+
+      <div class="modal-actions edit-modal-actions">
+        <button id="edit-cancel" class="btn btn-secondary">Hủy</button>
+        <button id="edit-save" class="btn btn-accent btn-large">💾 Lưu thay đổi</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

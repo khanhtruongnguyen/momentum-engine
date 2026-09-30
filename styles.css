@@ -3695,7 +3695,8 @@ select {
   border-radius: var(--radius-sm);
 }
 .gist-backup-meta { flex: 1; min-width: 0; }
-.gist-backup-name { font-size: 0.74rem; font-weight: 700; color: var(--text-primary); letter-spacing: 0.02em; }
+.gist-backup-name { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-size: 0.74rem; font-weight: 700; color: var(--text-primary); letter-spacing: 0.02em; }
+.gist-backup-ago  { flex-shrink: 0; font-size: 0.66rem; font-weight: 600; color: var(--accent); white-space: nowrap; }
 .gist-backup-sub { font-size: 0.68rem; color: var(--text-muted); }
 .gist-backup-list:empty::after {
   content: 'Chưa có bản sao lưu nào — bản đầu sẽ tự tạo sau lần đồng bộ đầu tiên.';

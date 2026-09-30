@@ -1451,6 +1451,40 @@ const GistSync = (() => {
 
   /* ── BACKUP UI: render danh sách 5 bản sao ──────────────────────── */
 
+  /** Tên file `momentum_backup_20260930T101500Z.json` → Date (đã trừ TZ) */
+  function parseBackupTime(fileName) {
+    const m = String(fileName).match(/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z/);
+    if (!m) return null;
+    const [, y, mo, d, h, mi, s] = m;
+    return new Date(Date.UTC(+y, +mo - 1, +d, +h, +mi, +s));
+  }
+
+  /** "3 phút trước" / "2 giờ trước" / "x ngày trước" */
+  function relTime(date) {
+    const sec = Math.floor((Date.now() - date.getTime()) / 1000);
+    if (sec < 60) return 'vừa xong';
+    const min = Math.floor(sec / 60);
+    if (min < 60) return `${min} phút trước`;
+    const hr = Math.floor(min / 60);
+    if (hr < 24) return `${hr} giờ trước`;
+    const day = Math.floor(hr / 24);
+    if (day < 30) return `${day} ngày trước`;
+    const mon = Math.floor(day / 30);
+    if (mon < 12) return `${mon} tháng trước`;
+    return `${Math.floor(mon / 12)} năm trước`;
+  }
+
+  /** "15:04:22 — Thứ Tư, 30/09/2026 · 3 phút trước" */
+  function formatBackupTime(fileName, at) {
+    if (!at) {
+      at = parseBackupTime(fileName);
+      if (!at) return { when: fileName, ago: '' };
+    }
+    const time = at.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const date = at.toLocaleDateString('vi-VN', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' });
+    return { when: `${time} — ${date}`, ago: relTime(at) };
+  }
+
   async function listBackups() {
     const { token, gistId } = getSettings();
     if (!token || !gistId) return [];
@@ -1460,13 +1494,12 @@ const GistSync = (() => {
       const f = files[name] || {};
       const bytes = (f.content || '').length;
       const size  = bytes > 1024 ? `${(bytes/1024).toFixed(1)} KB` : `${bytes} B`;
-      let time = name;
-      if (f.updated_at) {
-        try { time = new Date(f.updated_at).toLocaleString('vi-VN'); } catch {}
-      }
+      const at = parseBackupTime(name);
+      const { when, ago } = formatBackupTime(name, at);
       return {
-        name, size, time,
-        label: name.replace(BACKUP_PREFIX, '').replace(/\.json$/, ''),
+        name, size, when, ago,
+        at,
+        label: at ? at.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' }) : name,
       };
     });
   }
@@ -1487,23 +1520,31 @@ const GistSync = (() => {
     list.innerHTML = backups.map(b => `
       <div class="gist-backup-row" data-file="${escapeHtml(b.name)}">
         <div class="gist-backup-meta">
-          <div class="gist-backup-name">${escapeHtml(b.label)}</div>
-          <div class="gist-backup-sub">${escapeHtml(b.size)} · ${escapeHtml(b.time)}</div>
+          <div class="gist-backup-name">${escapeHtml(b.when)}${b.ago ? `<span class="gist-backup-ago">${escapeHtml(b.ago)}</span>` : ''}</div>
+          <div class="gist-backup-sub">${escapeHtml(b.label)} · ${escapeHtml(b.size)}</div>
         </div>
-        <button class="btn btn-secondary btn-small"
-                onclick="GistSync.restoreBackup('${escapeHtml(b.name)}')">
+        <button class="btn btn-secondary btn-small" data-restore="${escapeHtml(b.name)}">
           🔄 Khôi phục
         </button>
       </div>
     `).join('');
+
+    // Event delegation (không dùng inline onclick để tránh lỗi scope/nhân bản)
+    list.querySelectorAll('[data-restore]').forEach(btn => {
+      btn.addEventListener('click', e => restoreBackup(e.currentTarget.dataset.restore));
+    });
   }
 
   async function restoreBackup(filename) {
     const { token, gistId } = getSettings();
     if (!token || !gistId || !filename || !filename.startsWith(BACKUP_PREFIX)) return;
 
+    const at = parseBackupTime(filename);
+    const label = at ? formatBackupTime(filename, at) : { when: filename, ago: '' };
+    const pretty = `${label.when}${label.ago ? ` (${label.ago})` : ''}`;
+
     const confirmed = await new Promise(resolve => {
-      showConfirm('Khôi phục bản sao?', `Bạn sắp khôi phục “${filename}”. Dữ liệu hiện tại sẽ bị thay thế.`, result => resolve(!!result));
+      showConfirm('Khôi phục bản sao?', `Bạn sắp khôi phục “${pretty}”. Dữ liệu hiện tại sẽ bị thay thế.`, result => resolve(!!result));
     });
     if (!confirmed) return;
 
@@ -1521,9 +1562,10 @@ const GistSync = (() => {
       renderWeeklyChart(); renderWeeklySummary(); renderSessionHistory();
       renderShop(); renderGoals(); renderPenalties(); renderDailyBets();
       renderTasks(); renderAchievements(); renderStudyDashboard(); renderStats();
-      setStatus(`✅ Đã khôi phục “${filename}”`, 'ok');
-      showToast(`✅ Đã khôi phục bản sao “${filename}”`, 'success');
+      setStatus(`✅ Đã khôi phục “${pretty}”`, 'ok');
+      showToast(`✅ Đã khôi phục bản sao “${pretty}”`, 'success');
       await renderBackupList();
+      try { debouncedPush(); } catch {}
     } catch (err) {
       console.warn('restoreBackup error:', err);
       setStatus(`❌ Lỗi khôi phục: ${err.message}`, 'error');
@@ -5083,7 +5125,7 @@ function init() {
   document.getElementById('confirm-ok').addEventListener('click', () => {
     const cb = _confirmCallback;
     hideConfirm();       // ← đóng modal & clear callback TRƯỚC
-    if (cb) cb();        // ← rồi mới chạy callback (tránh nested showConfirm bị ghi đè)
+    if (cb) cb(true);     // ← truyền `true` (Promise-wrapped confirm cần giá trị để resolve)
   });
 
   // Close modals on overlay click

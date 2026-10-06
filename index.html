@@ -41,10 +41,6 @@
       <span class="tab-icon">📚</span>
       <span class="tab-label">Học tập</span>
     </button>
-    <button class="tab-btn" data-tab="shop" id="tab-btn-shop">
-      <span class="tab-icon">🛒</span>
-      <span class="tab-label">Cửa hàng</span>
-    </button>
     <button class="tab-btn" data-tab="goals" id="tab-btn-goals">
       <span class="tab-icon">🎯</span>
       <span class="tab-label">Mục tiêu</span>
@@ -74,19 +70,6 @@
       <!-- ── Setup Panel (no active session) ── -->
       <div id="study-setup">
         <div class="setup-grid">
-          <!-- Warmup Card -->
-          <div class="card warmup-card" id="warmup-card">
-            <div class="card-glow warmup-glow"></div>
-            <div class="card-header">
-              <span class="card-emoji">🔥</span>
-              <h2>Khởi động 5 phút</h2>
-            </div>
-            <p class="card-desc">Bắt đầu dễ dàng — không áp lực, không cược!</p>
-            <button id="btn-warmup" class="btn btn-warmup">
-              <span class="btn-icon">▶</span> Bắt đầu khởi động
-            </button>
-          </div>
-
           <!-- Main Session Card — Buổi học lớn (Macro-session Pomodoro) -->
           <div class="card session-card" id="session-card">
             <div class="card-glow session-glow"></div>
@@ -102,7 +85,7 @@
               </div>
               <div class="form-group">
                 <label for="session-chunk">Mỗi phiên nhỏ — Pomodoro (phút):</label>
-                <input type="number" id="session-chunk" min="5" max="60" value="25" step="5">
+                <input type="number" id="session-chunk" min="5" value="25" step="5">
               </div>
             </div>
 
@@ -122,6 +105,7 @@
               <span>🍅</span>
               Bạn sẽ có <strong id="chunk-count">15</strong> phiên × <strong id="chunk-duration-display">25</strong> phút, nghỉ 5p giữa mỗi phiên.
             </div>
+            <div class="deadline-estimate" id="deadline-estimate"></div>
 
             <!-- Betting -->
             <div class="betting-section" id="betting-section">
@@ -180,6 +164,13 @@
             🎰 Đã cược: <strong id="bet-active-amount">0</strong> Xu
           </div>
 
+          <!-- ⏰ Deadline: buổi học buộc kết thúc lúc nào -->
+          <div class="deadline-display hidden" id="deadline-display">
+            <span class="deadline-icon">⏰</span>
+            <span>Buổi học buộc kết thúc lúc <strong id="deadline-clock">--:--</strong></span>
+            <span class="deadline-remain" id="deadline-remain"></span>
+          </div>
+
           <div class="timer-controls">
             <button id="btn-pause" class="btn btn-secondary btn-icon-text">
               <span id="pause-icon">⏸</span>
@@ -208,6 +199,13 @@
             <div class="block-progress-bar-container">
               <div class="block-progress-bar" id="break-block-bar"></div>
             </div>
+          </div>
+
+          <!-- ⏰ Deadline trong lúc nghỉ (vẫn tính giờ) -->
+          <div class="deadline-display hidden" id="break-deadline-display">
+            <span class="deadline-icon">⏰</span>
+            <span>Buổi học buộc kết thúc lúc <strong id="break-deadline-clock">--:--</strong></span>
+            <span class="deadline-remain" id="break-deadline-remain"></span>
           </div>
 
           <!-- Actions during countdown -->
@@ -335,33 +333,8 @@
           <div class="stat-summary-row" id="stat-quarter-summary"></div>
         </div>
 
-        <!-- Trend (xu hướng 8 tuần / 6 tháng + TB 7 ngày) -->
-        <div id="stat-trend" class="trend-panel">
-          <div class="trend-header">
-            <span class="trend-title">Xu hướng</span>
-            <div class="trend-ma">
-              <span class="ma7-label">TB 7 ngày</span>
-              <span class="ma7-val" id="stat-ma7">0.0h</span>
-              <span class="ma7-cmp" id="stat-ma7-cmp"></span>
-            </div>
-          </div>
-          <div class="chart-wrapper">
-            <canvas id="trend-chart" height="180"></canvas>
-          </div>
-        </div>
-
-        <!-- Study dashboard: mục tiêu ngày + streak -->
+        <!-- Study dashboard: streak + tổng quan -->
         <div id="study-dashboard" class="dash-panel"></div>
-
-        <!-- Heatmap 52 tuần -->
-        <div class="heatmap-panel">
-          <div class="card-header heatmap-header">
-            <span class="card-emoji">🔥</span>
-            <h2>Lịch sử 52 tuần</h2>
-            <span id="heatmap-tip" class="heatmap-tip hidden"></span>
-          </div>
-          <div id="study-heatmap" class="heatmap-scroll"></div>
-        </div>
 
         <!-- Recap tháng (tự sinh 1 lần/tháng) -->
         <div id="monthly-recap" class="hidden"></div>
@@ -372,105 +345,6 @@
           <button class="btn btn-secondary btn-small" onclick="Export.csv()">📄 CSV</button>
           <button class="btn btn-secondary btn-small" onclick="Export.json()">💾 JSON</button>
           <button class="btn btn-secondary btn-small" onclick="Export.ics()">🗓️ ICS (Lịch)</button>
-        </div>
-
-        <div class="card-header history-header">
-          <span class="card-emoji">📜</span>
-          <h2>Lịch sử phiên học</h2>
-        </div>
-        <div id="subject-breakdown" class="subject-breakdown"></div>
-        <div id="history-controls" class="history-controls"></div>
-        <div id="session-history" class="session-history-list">
-          <p class="empty-state">Chưa có phiên học nào. Bắt đầu ngay!</p>
-        </div>
-      </div>
-    </section>
-
-
-    <!-- ══════════════════════════════════════ -->
-    <!-- TAB 2 : CỬA HÀNG                     -->
-    <!-- ══════════════════════════════════════ -->
-    <section id="tab-shop" class="tab-panel hidden">
-      <!-- Passive Upgrade -->
-      <div class="card shop-card" id="passive-upgrade-card">
-        <div class="card-glow shop-glow"></div>
-        <div class="card-header">
-          <span class="card-emoji">⚡</span>
-          <h2>Nâng cấp Xu thụ động</h2>
-        </div>
-        <p class="card-desc">Mỗi lần nâng cấp tăng <strong>+10%</strong> Xu kiếm được. Tối đa 20 lần (+200%).</p>
-        <div class="upgrade-visual">
-          <div class="upgrade-level-badge" id="passive-upgrade-level">0 / 20</div>
-          <div class="upgrade-bar-container">
-            <div class="upgrade-bar" id="passive-upgrade-bar" style="width:0%"></div>
-          </div>
-          <div class="upgrade-bonus" id="passive-upgrade-bonus">+0% bonus</div>
-        </div>
-        <button id="btn-buy-passive" class="btn btn-primary">🛒 Mua nâng cấp — 500 Xu</button>
-      </div>
-
-      <!-- Rest Passes Shop -->
-      <div class="card shop-card" id="rest-passes-card">
-        <div class="card-header">
-          <span class="card-emoji">🎫</span>
-          <h2>Vé nghỉ ngơi</h2>
-        </div>
-        <div class="passes-grid">
-          <div class="pass-shop-item">
-            <div class="pass-icon">☕</div>
-            <h3>Vé nghỉ 45 phút</h3>
-            <p>Nghỉ ngơi hợp lệ không bị phạt</p>
-            <button id="btn-buy-45" class="btn btn-accent">Mua — 100 Xu</button>
-          </div>
-          <div class="pass-shop-item">
-            <div class="pass-icon">🛏️</div>
-            <h3>Vé nghỉ 3 giờ</h3>
-            <p>Nghỉ ngơi dài, xứng đáng!</p>
-            <button id="btn-buy-3h" class="btn btn-accent">Mua — 350 Xu</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Inventory -->
-      <div class="card shop-card" id="inventory-card">
-        <div class="card-header">
-          <span class="card-emoji">🎒</span>
-          <h2>Kho đồ</h2>
-        </div>
-        <div id="inventory-list" class="inventory-list">
-          <p class="empty-state">Kho đồ trống — hãy mua vé nghỉ ngơi!</p>
-        </div>
-      </div>
-
-      <!-- Penalty Tickets -->
-      <div class="card shop-card penalty-card" id="penalty-card">
-        <div class="card-glow penalty-glow"></div>
-        <div class="card-header">
-          <span class="card-emoji">🚨</span>
-          <h2>Phiếu phạt — Chơi bẩn</h2>
-        </div>
-        <p class="card-desc">Đã nghỉ ngơi hoặc chơi bời mà <strong>không mua vé</strong>? Khai báo trung thực và nộp phạt. Phiếu quá hạn 5 ngày sẽ bị <span class="text-red">hạ 1 cấp</span>!</p>
-
-        <!-- Create ticket form -->
-        <div class="penalty-form">
-          <div class="penalty-form-row">
-            <div class="form-group" style="flex:1; margin-bottom:0">
-              <label for="dirty-mins-input">Số phút đã chơi bẩn:</label>
-              <input type="number" id="dirty-mins-input" min="1" placeholder="VD: 60" step="1">
-            </div>
-            <div class="fine-preview-block">
-              <span class="fine-preview-label">Tiền phạt</span>
-              <span class="fine-preview-amount" id="fine-preview">— Xu</span>
-            </div>
-          </div>
-          <button id="btn-create-penalty" class="btn btn-danger btn-large" style="margin-top:14px">
-            <span class="btn-icon">📋</span> Tạo phiếu phạt
-          </button>
-        </div>
-
-        <!-- Ticket list -->
-        <div id="penalty-list" class="penalty-list">
-          <p class="empty-state">Chưa có phiếu phạt nào. Chơi sạch nhé! 😇</p>
         </div>
       </div>
     </section>
@@ -1066,10 +940,7 @@
         <p class="card-desc">Xóa từng loại dữ liệu riêng lẻ (có xác nhận).</p>
         <div class="data-mgmt-grid">
           <button class="btn btn-danger-soft" id="btn-clear-sessions">
-            <span>📜</span> Xóa lịch sử phiên học
-          </button>
-          <button class="btn btn-danger-soft" id="btn-clear-penalties">
-            <span>🚨</span> Xóa phiếu phạt
+            <span>📊</span> Xóa dữ liệu thống kê
           </button>
           <button class="btn btn-danger-soft" id="btn-clear-daily-bets">
             <span>📅</span> Xóa phiếu cược ngày

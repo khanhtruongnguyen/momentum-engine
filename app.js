@@ -886,7 +886,7 @@ const Stats = {
 //      + log khoảng nghỉ (gap) cho heatmap
 // ═══════════════════════════════════════════
 
-const LIVE_SESSION_KINDS = ['warmup', 'main']; // 'break' KHÔNG tính giờ học
+const LIVE_SESSION_KINDS = ['main']; // 'break' KHÔNG tính giờ học
 const LIVE_FLUSH_MS = 15000;                    // phải ≥15s mới ghi 1 khoảng
 const HEARTBEAT_EVERY_MS = 30000;
 const MAX_LIVE_INTERSECT_MS = 2 * 60 * 60 * 1000; // chống ghi trùng quá 2h
@@ -1368,10 +1368,7 @@ const GistSync = (() => {
         updateHeaderUI();
         renderWeeklyChart();
         renderWeeklySummary();
-        renderSessionHistory();
-        renderShop();
         renderGoals();
-        renderPenalties();
         renderDailyBets();
         renderTasks();
         renderAchievements();
@@ -1559,8 +1556,8 @@ const GistSync = (() => {
       Stats.invalidate();
       try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch {}
       updateHeaderUI();
-      renderWeeklyChart(); renderWeeklySummary(); renderSessionHistory();
-      renderShop(); renderGoals(); renderPenalties(); renderDailyBets();
+      renderWeeklyChart(); renderWeeklySummary();
+      renderGoals(); renderDailyBets();
       renderTasks(); renderAchievements(); renderStudyDashboard(); renderStats();
       setStatus(`✅ Đã khôi phục “${pretty}”`, 'ok');
       showToast(`✅ Đã khôi phục bản sao “${pretty}”`, 'success');
@@ -1691,9 +1688,6 @@ function switchTab(tabName) {
   // Refresh tab-specific content
   if (tabName === 'study') {
     renderStats();
-  } else if (tabName === 'shop') {
-    renderShop();
-    renderPenalties();
   } else if (tabName === 'goals') {
     renderGoals();
     checkDailyBets();
@@ -1758,7 +1752,6 @@ function updateTimerDisplay() {
 
   // Update type label
   const typeLabels = {
-    warmup: '🔥 Khởi động',
     main: state.activeBlock
       ? `🍅 Phiên ${state.activeBlock.currentChunk} / ${state.activeBlock.totalChunks}`
       : '🎯 Phiên học',
@@ -1784,6 +1777,9 @@ function updateTimerDisplay() {
     if (pauseIcon) pauseIcon.textContent = '⏸';
     if (pauseLabel) pauseLabel.textContent = 'Tạm dừng';
   }
+
+  // ⏰ Cập nhật badge deadline (giây nào cũng refresh)
+  updateDeadlineUI();
 }
 
 function timerTick() {
@@ -1820,6 +1816,9 @@ function timerTick() {
     return;
   }
 
+  // ⏰ Deadline tuyệt đối — pause cũng bị tính. Quá hạn → auto-fail.
+  if (checkBlockDeadline()) return;
+
   timerRAF = requestAnimationFrame(timerTick);
 }
 
@@ -1840,6 +1839,96 @@ function stopTimerLoop() {
   }
 }
 
+// ⏰ AUTO-FAIL: quá deadline (giờ tạo + ETA + ngân sách nghỉ) và chưa hoàn thành →
+//    buổi học thất bại, mất toàn bộ tiền cược (10× cược). Pause không gia hạn.
+const DEADLINE_GRACE_MS = 3000; // ân hạn nhỏ để chunk cuối kịp hoàn thành vừa đúng deadline
+
+function checkBlockDeadline() {
+  const block = state.activeBlock;
+  if (!block || block.completedMins >= block.targetMins) return false;
+  if (!block.deadlineAt) return false;
+  if (Date.now() < block.deadlineAt + DEADLINE_GRACE_MS) return false;
+  failExpiredBlock();
+  return true;
+}
+
+function failExpiredBlock() {
+  stopTimerLoop();
+  const betAmount = state.activeBlock ? (state.activeBlock.betAmount || 0) : 0;
+  if (betAmount > 0) {
+    const loss = betAmount * 10;
+    addCoins(-loss);
+    showToast(`⏰ Hết giờ! Buổi học thất bại — mất ${loss} Xu (10× cược).`, 'error');
+    SoundEngine.betLose();
+  } else {
+    showToast('⏰ Hết giờ! Buổi học chưa hoàn thành đúng ETA — thất bại.', 'error');
+    SoundEngine.quitSound();
+  }
+  state.activeBlock = null;
+  state.timerSession = null;
+  saveState();
+  showStudySetup();
+}
+
+// ⏰ HIỂN THỊ DEADLINE — để người học biết buổi buộc kết thúc lúc nào
+//    → linh hoạt sắp xếp thời gian. Badge tự đổi màu khi sắp hết hạn.
+
+function formatDeadlineClock(deadlineAt) {
+  // "14:35" — giờ local
+  return new Date(deadlineAt).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+}
+
+function formatDeadlineDuration(mins) {
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  if (h > 0) return `${h} giờ${m > 0 ? ` ${m} phút` : ''}`;
+  return `${m} phút`;
+}
+
+/** Badge đang chạy (màn học + màn nghỉ): đếm ngược tới deadline. */
+function updateDeadlineUI() {
+  const block = state.activeBlock;
+  const active = !!(block && block.deadlineAt && block.completedMins < block.targetMins);
+  const remainMs = active ? Math.max(0, block.deadlineAt - Date.now()) : 0;
+
+  [['deadline-display', 'deadline-clock', 'deadline-remain'],
+   ['break-deadline-display', 'break-deadline-clock', 'break-deadline-remain']
+  ].forEach(([boxId, clockId, remainId]) => {
+    const box = document.getElementById(boxId);
+    if (!box) return;
+    if (!active) { box.classList.add('hidden'); return; }
+    box.classList.remove('hidden');
+    const clockEl = document.getElementById(clockId);
+    const remainEl = document.getElementById(remainId);
+    if (clockEl) clockEl.textContent = formatDeadlineClock(block.deadlineAt);
+    if (remainEl) remainEl.textContent = `còn ${formatTime(remainMs)}`;
+    // Cảnh báo: ≤15 phút → vàng, ≤5 phút → đỏ + nhấp nháy
+    box.classList.toggle('urgent', remainMs <= 15 * 60 * 1000 && remainMs > 5 * 60 * 1000);
+    box.classList.toggle('critical', remainMs <= 5 * 60 * 1000);
+  });
+}
+
+/** Dòng dự kiến trên màn setup — cập nhật khi đổi tổng thời gian / phiên. */
+function updateDeadlineEstimate() {
+  const el = document.getElementById('deadline-estimate');
+  if (!el) return;
+  const targetMins = parseInt(document.getElementById('session-target-total').value, 10);
+  const chunkMins = parseInt(document.getElementById('session-chunk').value, 10);
+  if (isNaN(targetMins) || targetMins < 25 || isNaN(chunkMins) || chunkMins < 5 || chunkMins > targetMins) {
+    el.textContent = '';
+    el.classList.remove('has-value');
+    return;
+  }
+  const totalChunks = Math.ceil(targetMins / chunkMins);
+  const breakBudgetMins = (totalChunks - 1) * 5;
+  const totalWithBreak = targetMins + breakBudgetMins;
+  const deadlineAt = Date.now() + totalWithBreak * 60 * 1000;
+  el.classList.add('has-value');
+  el.innerHTML =
+    `⏰ Buổi học sẽ bị chốt giờ lúc <span class="deadline-time">${formatDeadlineClock(deadlineAt)}</span>` +
+    ` <span class="deadline-warn">(sau ~${formatDeadlineDuration(totalWithBreak)} nữa — nghỉ cũng tính!)</span>`;
+}
+
 // ═══════════════════════════════════════════
 // 6. SESSION MANAGEMENT
 // ═══════════════════════════════════════════
@@ -1848,6 +1937,7 @@ function showStudySetup() {
   document.getElementById('study-setup').classList.remove('hidden');
   document.getElementById('study-active').classList.add('hidden');
   document.getElementById('study-break').classList.add('hidden');
+  updateDeadlineUI(); // ẩn badge deadline khi không còn buổi học
 }
 
 function showStudyActive() {
@@ -1863,28 +1953,6 @@ function showStudyBreak() {
   document.getElementById('study-setup').classList.add('hidden');
   document.getElementById('study-active').classList.add('hidden');
   document.getElementById('study-break').classList.remove('hidden');
-}
-
-function startWarmup() {
-  const durationMs = 5 * 60 * 1000; // 5 minutes
-  state.timerSession = {
-    type: 'warmup',
-    startTime: Date.now(),
-    targetEndTime: Date.now() + durationMs,
-    durationMs,
-    isPaused: false,
-    pauseStartTime: null,
-    accumulatedPauseTime: 0,
-    bet: null,
-    pomodoroMode: false,
-    sessionDurationMins: 5
-  };
-  saveState();
-  showStudyActive();
-  updateBetActiveDisplay();
-  startTimerLoop();
-  SoundEngine.warmupStart();
-  showToast('🔥 Khởi động 5 phút — bạn làm được!', 'info');
 }
 
 function startMainSession() {
@@ -1909,10 +1977,6 @@ function startMainSession() {
     setTimeout(() => chunkInput.classList.remove('shake'), 500);
     return;
   }
-  if (chunkMins > 60) {
-    showToast('⚠️ Phiên nhỏ tối đa là 60 phút!', 'warning');
-    return;
-  }
   if (chunkMins > targetMins) {
     showToast('⚠️ Phiên nhỏ không được lớn hơn tổng thời gian!', 'warning');
     return;
@@ -1934,6 +1998,11 @@ function startMainSession() {
   const firstChunkMins = Math.min(chunkMins, targetMins);
   const durationMs = firstChunkMins * 60 * 1000;
 
+  // ⏰ DEADLINE: giờ tạo + ETA (targetMins) + ngân sách nghỉ giữa phiên
+  //    (5p × số lần nghỉ). Pause KHÔNG gia hạn deadline — quá hạn → auto-fail.
+  const breakBudgetMins = (totalChunks - 1) * 5;
+  const deadlineAt = Date.now() + (targetMins + breakBudgetMins) * 60 * 1000;
+
   // Create activeBlock to track the entire macro-session
   state.activeBlock = {
     targetMins,
@@ -1942,7 +2011,8 @@ function startMainSession() {
     chunkMins,
     totalChunks,
     currentChunk: 1,
-    startedAt: Date.now()
+    startedAt: Date.now(),
+    deadlineAt
   };
 
   // Create timer for the first chunk
@@ -2030,7 +2100,6 @@ function quitSession() {
       stopTimerLoop();
       showStudySetup();
       renderWeeklyChart();
-      renderSessionHistory();
     }
   );
 }
@@ -2039,33 +2108,6 @@ function onTimerComplete() {
   stopTimerLoop();
   const s = state.timerSession;
   if (!s) return;
-
-  if (s.type === 'warmup') {
-    // Warmup done — award a small bonus, go to setup
-    const earnedExp = 5;
-    const earnedCoins = Math.round(5 * getCoinMultiplier());
-    addExp(earnedExp);
-    addCoins(earnedCoins);
-
-    state.sessions.push({
-      id: Date.now().toString(),
-      date: new Date().toISOString(),
-      durationMins: 5,
-      notes: '',
-      expEarned: earnedExp,
-      coinsEarned: earnedCoins,
-      type: 'warmup'
-    });
-
-    state.timerSession = null;
-    saveState();
-    showStudySetup();
-    SoundEngine.chunkComplete();
-    showToast('🔥 Khởi động xong! Sẵn sàng cho buổi học!', 'success');
-    renderWeeklyChart();
-    renderSessionHistory();
-    return;
-  }
 
   if (s.type === 'break') {
     // Break done — show "start next chunk" button, DON'T auto-start
@@ -2079,7 +2121,13 @@ function onTimerComplete() {
 
   // ═══ Main chunk completed! ═══
   const block = state.activeBlock;
-  if (!block) return;
+  if (!block) {
+    // Session không còn thuộc buổi nào (state cũ) — dọn dẹp
+    state.timerSession = null;
+    saveState();
+    showStudySetup();
+    return;
+  }
 
   const chunkMins = s.sessionDurationMins;
 
@@ -2175,7 +2223,6 @@ function onTimerComplete() {
   saveState();
   startBreak();
   renderWeeklyChart();
-  renderSessionHistory();
 }
 
 function saveRetrospective() {
@@ -2211,7 +2258,6 @@ function saveRetrospective() {
     showToast('🎉 Buổi học hoàn thành xuất sắc!', 'success');
   }
   renderWeeklyChart();
-  renderSessionHistory();
 }
 
 function startBreak() {
@@ -2255,10 +2301,14 @@ function startBreakTimerLoop() {
     }
     const remaining = getRemainingMs();
     document.getElementById('break-timer-time').textContent = formatTime(remaining);
+    // ⏰ Badge deadline vẫn chạy khi đang nghỉ
+    updateDeadlineUI();
     if (remaining <= 0) {
       onTimerComplete();
       return;
     }
+    // ⏰ Deadline tuyệt đối — kể cả khi đang nghỉ
+    if (checkBlockDeadline()) return;
     breakRAF = requestAnimationFrame(tick);
   }
   breakRAF = requestAnimationFrame(tick);
@@ -2338,333 +2388,6 @@ function updateBreakBlockProgress() {
   document.getElementById('break-block-bar').style.width = pct + '%';
   document.getElementById('break-block-label').textContent =
     `Đã hoàn thành: ${block.completedMins} / ${block.targetMins} phút`;
-}
-
-// ═══════════════════════════════════════════
-// 7. SHOP & UPGRADES
-// ═══════════════════════════════════════════
-
-function renderShop() {
-  // Passive upgrade
-  const level = state.passiveCoinUpgrades;
-  document.getElementById('passive-upgrade-level').textContent = `${level} / 20`;
-  document.getElementById('passive-upgrade-bar').style.width = `${(level / 20) * 100}%`;
-  document.getElementById('passive-upgrade-bonus').textContent = `+${level * 10}% bonus`;
-
-  const btnBuy = document.getElementById('btn-buy-passive');
-  if (level >= 20) {
-    btnBuy.textContent = '✅ Đã nâng cấp tối đa!';
-    btnBuy.disabled = true;
-  } else {
-    btnBuy.textContent = '🛒 Mua nâng cấp — 500 Xu';
-    btnBuy.disabled = false;
-  }
-
-  // Inventory
-  renderInventory();
-}
-
-function buyPassiveUpgrade() {
-  if (state.passiveCoinUpgrades >= 20) {
-    showToast('⚠️ Đã đạt tối đa 20 lần nâng cấp!', 'warning');
-    return;
-  }
-  if (state.coins < 500) {
-    showToast('💰 Không đủ Xu! Cần 500 Xu.', 'error');
-    return;
-  }
-  addCoins(-500);
-  state.passiveCoinUpgrades++;
-  saveState();
-  renderShop();
-  SoundEngine.purchase();
-  showToast(`⚡ Nâng cấp thành công! +${state.passiveCoinUpgrades * 10}% Xu bonus`, 'success');
-}
-
-function buyRestPass(type) {
-  const cost = type === '45min' ? 100 : 350;
-  const name = type === '45min' ? 'Vé nghỉ 45 phút' : 'Vé nghỉ 3 giờ';
-  if (state.coins < cost) {
-    SoundEngine.warning();
-    showToast(`💰 Không đủ Xu! Cần ${cost} Xu.`, 'error');
-    return;
-  }
-  addCoins(-cost);
-  state.restPasses.push({
-    id: Date.now().toString(),
-    type
-  });
-  saveState();
-  renderShop();
-  SoundEngine.purchase();
-  showToast(`🎫 Đã mua ${name}!`, 'success');
-}
-
-function activateRestPass(passId) {
-  if (state.activeRestPass) {
-    SoundEngine.warning();
-    showToast('⚠️ Đã có vé đang hoạt động!', 'warning');
-    return;
-  }
-  const idx = state.restPasses.findIndex(p => p.id === passId);
-  if (idx === -1) return;
-  const pass = state.restPasses[idx];
-  const durationMs = pass.type === '45min' ? 45 * 60 * 1000 : 3 * 60 * 60 * 1000;
-  state.activeRestPass = {
-    id: pass.id,
-    type: pass.type,
-    activatedAt: Date.now(),
-    expiresAt: Date.now() + durationMs
-  };
-  state.restPasses.splice(idx, 1);
-  saveState();
-  renderShop();
-  const label = pass.type === '45min' ? '45 phút' : '3 giờ';
-  SoundEngine.purchase();
-  showToast(`✅ Đã kích hoạt Vé nghỉ ${label}!`, 'success');
-}
-
-function renderInventory() {
-  const container = document.getElementById('inventory-list');
-
-  // Check if active rest pass has expired
-  if (state.activeRestPass && Date.now() > state.activeRestPass.expiresAt) {
-    state.activeRestPass = null;
-    saveState();
-  }
-
-  let html = '';
-
-  // Active pass banner
-  if (state.activeRestPass) {
-    const remaining = state.activeRestPass.expiresAt - Date.now();
-    const label = state.activeRestPass.type === '45min' ? '45 phút' : '3 giờ';
-    html += `
-      <div class="active-pass-banner">
-        <div>
-          <strong>🟢 Vé nghỉ ${label} đang hoạt động</strong>
-        </div>
-        <span class="pass-timer">Còn ${formatTime(remaining)}</span>
-      </div>
-    `;
-  }
-
-  // Group passes by type
-  const passes45 = state.restPasses.filter(p => p.type === '45min');
-  const passes3h = state.restPasses.filter(p => p.type === '3hr');
-
-  if (passes45.length === 0 && passes3h.length === 0 && !state.activeRestPass) {
-    container.innerHTML = '<p class="empty-state">Kho đồ trống — hãy mua vé nghỉ ngơi!</p>';
-    return;
-  }
-
-  if (passes45.length > 0) {
-    html += `
-      <div class="inventory-item">
-        <div class="inv-info">
-          <span class="inv-icon">☕</span>
-          <div>
-            <div class="inv-name">Vé nghỉ 45 phút</div>
-            <div class="inv-count">Số lượng: ${passes45.length}</div>
-          </div>
-        </div>
-        <button class="btn btn-success btn-small" onclick="activateRestPass('${passes45[0].id}')">
-          Kích hoạt
-        </button>
-      </div>
-    `;
-  }
-
-  if (passes3h.length > 0) {
-    html += `
-      <div class="inventory-item">
-        <div class="inv-info">
-          <span class="inv-icon">🛏️</span>
-          <div>
-            <div class="inv-name">Vé nghỉ 3 giờ</div>
-            <div class="inv-count">Số lượng: ${passes3h.length}</div>
-          </div>
-        </div>
-        <button class="btn btn-success btn-small" onclick="activateRestPass('${passes3h[0].id}')">
-          Kích hoạt
-        </button>
-      </div>
-    `;
-  }
-
-  container.innerHTML = html;
-}
-
-// ═══════════════════════════════════════════
-// 8. PENALTY TICKETS
-// ═══════════════════════════════════════════
-
-const PENALTY_RATE = 3; // Xu per dirty minute
-const PENALTY_OVERDUE_DAYS = 5;
-
-function createPenaltyTicket() {
-  const input = document.getElementById('dirty-mins-input');
-  const dirtyMins = parseInt(input.value, 10);
-  if (isNaN(dirtyMins) || dirtyMins <= 0) {
-    showToast('⚠️ Nhập số phút chơi bẩn hợp lệ!', 'warning');
-    input.classList.add('shake');
-    setTimeout(() => input.classList.remove('shake'), 500);
-    return;
-  }
-  const fineAmount = dirtyMins * PENALTY_RATE;
-  state.penaltyTickets.push({
-    id: Date.now().toString(),
-    dirtyMins,
-    fineAmount,
-    createdAt: new Date().toISOString(),
-    paidAt: null,
-    demoted: false
-  });
-  saveState();
-  input.value = '';
-  document.getElementById('fine-preview').textContent = '— Xu';
-  renderPenalties();
-  SoundEngine.penaltyCreated();
-  showToast(`📋 Đã tạo phiếu phạt ${dirtyMins} phút → ${fineAmount} Xu. Nộp phạt trước 5 ngày!`, 'warning');
-}
-
-function payPenaltyTicket(id) {
-  const ticket = state.penaltyTickets.find(t => t.id === id);
-  if (!ticket || ticket.paidAt) return;
-  if (state.coins < ticket.fineAmount) {
-    SoundEngine.warning();
-    showToast(`💰 Không đủ Xu! Cần ${ticket.fineAmount} Xu để nộp phạt.`, 'error');
-    return;
-  }
-  addCoins(-ticket.fineAmount);
-  ticket.paidAt = new Date().toISOString();
-  saveState();
-  renderPenalties();
-  SoundEngine.penaltyPaid();
-  showToast(`✅ Đã nộp phạt ${ticket.fineAmount} Xu! Lần sau nhớ mua vé nhé.`, 'success');
-}
-
-function demoteLevel() {
-  if (state.level <= 1) {
-    state.exp = 0;
-    SoundEngine.bankrupt();
-    showToast('💀 Phiếu phạt quá hạn 5 ngày! EXP bị xóa (đã ở cấp 1).', 'error');
-  } else {
-    state.level--;
-    state.exp = 0;
-    SoundEngine.betLose();
-    showToast(`💔 Bị hạ xuống Cấp ${state.level} do phiếu phạt quá hạn 5 ngày!`, 'error');
-  }
-  saveState();
-  updateHeaderUI();
-}
-
-function checkOverduePenalties() {
-  const now = Date.now();
-  const threshold = PENALTY_OVERDUE_DAYS * 24 * 60 * 60 * 1000;
-  let newDemotions = 0;
-  (state.penaltyTickets || []).forEach(ticket => {
-    if (!ticket.paidAt && !ticket.demoted) {
-      if (now - new Date(ticket.createdAt).getTime() >= threshold) {
-        ticket.demoted = true;
-        newDemotions++;
-      }
-    }
-  });
-  if (newDemotions > 0) {
-    for (let i = 0; i < newDemotions; i++) demoteLevel();
-    saveState();
-  }
-}
-
-function updateFinePreview() {
-  const input = document.getElementById('dirty-mins-input');
-  const preview = document.getElementById('fine-preview');
-  if (!input || !preview) return;
-  const mins = parseInt(input.value, 10);
-  preview.textContent = (mins > 0) ? `${mins * PENALTY_RATE} Xu` : '— Xu';
-}
-
-function renderPenalties() {
-  checkOverduePenalties();
-  const container = document.getElementById('penalty-list');
-  if (!container) return;
-
-  const tickets = state.penaltyTickets || [];
-  if (tickets.length === 0) {
-    container.innerHTML = '<p class="empty-state">Chưa có phiếu phạt nào. Chơi sạch nhé! 😇</p>';
-    return;
-  }
-
-  const now = Date.now();
-  const threshold = PENALTY_OVERDUE_DAYS * 24 * 60 * 60 * 1000;
-  const unpaid = tickets.filter(t => !t.paidAt);
-  const paid   = tickets.filter(t =>  t.paidAt);
-
-  let html = '';
-
-  if (unpaid.length > 0) {
-    html += '<div class="penalty-section-label">⏳ Chưa thanh toán</div>';
-    unpaid.forEach(ticket => {
-      const age = now - new Date(ticket.createdAt).getTime();
-      const msLeft = threshold - age;
-      const daysLeft = Math.max(0, Math.ceil(msLeft / (1000 * 60 * 60 * 24)));
-      const urgent  = daysLeft <= 1 && !ticket.demoted;
-      const createdStr = new Date(ticket.createdAt).toLocaleDateString('vi-VN', {
-        day: '2-digit', month: '2-digit', year: 'numeric'
-      });
-      html += `
-        <div class="penalty-item${ticket.demoted ? ' penalty-overdue' : urgent ? ' penalty-urgent' : ''}">
-          <div class="penalty-info">
-            <div class="penalty-meta">
-              <span class="penalty-icon">${ticket.demoted ? '⚠️' : '🎮'}</span>
-              <div>
-                <div class="penalty-mins">${ticket.dirtyMins} phút chơi bẩn</div>
-                <div class="penalty-date">Ngày tạo: ${createdStr}</div>
-              </div>
-            </div>
-            <div class="penalty-deadline${urgent ? ' urgent' : ''}">
-              ${ticket.demoted
-                ? '⚠️ Đã bị hạ 1 cấp — vẫn cần nộp phạt!'
-                : `⏰ Còn <strong>${daysLeft}</strong> ngày trước khi bị hạ cấp`}
-            </div>
-          </div>
-          <div class="penalty-right">
-            <div class="penalty-amount">${ticket.fineAmount} Xu</div>
-            <button class="btn btn-danger btn-small" onclick="payPenaltyTicket('${ticket.id}')">
-              Nộp phạt
-            </button>
-          </div>
-        </div>
-      `;
-    });
-  }
-
-  if (paid.length > 0) {
-    html += '<div class="penalty-section-label" style="margin-top:16px;">✅ Đã thanh toán</div>';
-    [...paid].reverse().slice(0, 10).forEach(ticket => {
-      const createdStr = new Date(ticket.createdAt).toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' });
-      const paidStr    = new Date(ticket.paidAt).toLocaleDateString('vi-VN',    { day: '2-digit', month: '2-digit', year: 'numeric' });
-      html += `
-        <div class="penalty-item penalty-paid">
-          <div class="penalty-info">
-            <div class="penalty-meta">
-              <span class="penalty-icon">✅</span>
-              <div>
-                <div class="penalty-mins">${ticket.dirtyMins} phút chơi bẩn</div>
-                <div class="penalty-date">Tạo: ${createdStr} &nbsp;·&nbsp; Nộp: ${paidStr}</div>
-              </div>
-            </div>
-          </div>
-          <div class="penalty-right">
-            <div class="penalty-amount paid">−${ticket.fineAmount} Xu</div>
-          </div>
-        </div>
-      `;
-    });
-  }
-
-  container.innerHTML = html;
 }
 
 // ═══════════════════════════════════════════
@@ -3474,23 +3197,13 @@ function renderTasks() {
 // ═══════════════════════════════════════════
 
 function clearSessions() {
-  showConfirm('📜 Xóa lịch sử phiên học?',
+  showConfirm('📊 Xóa dữ liệu thống kê?',
     'Xóa toàn bộ lịch sử phiên học? Thống kê tuần và tiến độ phiếu cược ngày cũng sẽ bị xóa.',
     () => {
       state.sessions = [];
       saveState();
-      renderWeeklyChart(); renderSessionHistory(); renderDailyBets();
-      showToast('🗑️ Đã xóa lịch sử phiên học.', 'info');
-    });
-}
-
-function clearPenalties() {
-  showConfirm('🚨 Xóa phiếu phạt?',
-    'Xóa toàn bộ phiếu phạt (cả đã và chưa nộp)?',
-    () => {
-      state.penaltyTickets = [];
-      saveState(); renderPenalties();
-      showToast('🗑️ Đã xóa phiếu phạt.', 'info');
+      renderWeeklyChart(); renderDailyBets();
+      showToast('🗑️ Đã xóa dữ liệu thống kê.', 'info');
     });
 }
 
@@ -3777,7 +3490,6 @@ function renderStats() {
   } else if (currentStatMode === 'hour') {
     renderHourPanel();
   }
-  renderHeatmap();
   renderStudyDashboard();
   maybeShowMonthlyRecap();
 }
@@ -3832,114 +3544,8 @@ function renderWeeklySummary() {
 
   const cmpEl = document.getElementById('stat-week-compare');
   if (cmpEl) cmpEl.innerHTML = compareBadge(Stats.compare('week'));
-  renderTrendPanel('week');
 }
 
-/** Đường xu hướng (8 tuần hoặc 6 tháng) + trung bình 7 ngày. */
-function renderTrendPanel(mode) {
-  const el = document.getElementById('stat-trend');
-  if (!el) return;
-  const canvas = document.getElementById('trend-chart');
-  const titleEl = el.querySelector('.trend-title');
-  if (titleEl) titleEl.textContent = mode === 'week' ? 'Xu hướng 8 tuần' : 'Xu hướng 6 tháng';
-
-  let data, labels;
-  if (mode === 'week') {
-    data = []; labels = [];
-    for (let i = 7; i >= 0; i--) {
-      const ws = addDays(getWeekStart(new Date()), -7 * i);
-      data.push(Stats.weekTotal(ws));
-      labels.push(`${ws.getDate()}/${ws.getMonth() + 1}`);
-    }
-  } else {
-    const now = new Date();
-    data = []; labels = [];
-    for (let i = 5; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      data.push(Stats.monthTotal(d.getFullYear(), d.getMonth()));
-      labels.push(`T${d.getMonth() + 1}`);
-    }
-  }
-  drawTrendChart(canvas, data, labels);
-
-  // Trung bình 7 ngày vs TB 4 kỳ gần nhất
-  const maEl = document.getElementById('stat-ma7');
-  if (maEl) {
-    const ma7 = Stats.last7Days() / 7;
-    const base = avg(data.slice(-4));
-    maEl.textContent = fmtHoursDec(ma7) + 'h';
-    const cmpEl = document.getElementById('stat-ma7-cmp');
-    if (cmpEl) {
-      if (base > 0) {
-        const pct = ((ma7 - base) / base) * 100;
-        cmpEl.textContent = `${pct >= 0 ? '▲' : '▼'} ${Math.abs(pct).toFixed(0)}%`;
-        cmpEl.className = `ma7-cmp ${pct >= 0 ? 'cmp-up' : 'cmp-down'}`;
-      } else { cmpEl.textContent = ''; cmpEl.className = 'ma7-cmp'; }
-    }
-  }
-}
-
-function drawTrendChart(canvas, data, labels) {
-  if (!canvas) return;
-  const ctx = canvas.getContext('2d');
-  const dpr = window.devicePixelRatio || 1;
-  const rect = canvas.getBoundingClientRect();
-  if (rect.width === 0) return;
-  canvas.width = rect.width * dpr;
-  canvas.height = rect.height * dpr;
-  ctx.scale(dpr, dpr);
-  const W = rect.width, H = rect.height;
-  ctx.clearRect(0, 0, W, H);
-
-  const maxM = Math.max(60, ...data);
-  const pad = { top: 12, right: 12, bottom: 20, left: 38 };
-  const cW = W - pad.left - pad.right, cH = H - pad.top - pad.bottom;
-  const step = cW / Math.max(1, data.length - 1);
-  const X = i => pad.left + step * i;
-  const Y = v => pad.top + cH - (v / maxM) * cH;
-
-  ctx.strokeStyle = 'rgba(120,100,255,0.08)';
-  ctx.fillStyle = '#6b6490';
-  ctx.font = '9px Inter,sans-serif';
-  ctx.textAlign = 'right';
-  for (let i = 0; i <= 2; i++) {
-    const y = pad.top + (cH / 2) * i;
-    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W - pad.right, y); ctx.stroke();
-    ctx.fillText(fmtMins(Math.round(maxM - (maxM / 2) * i)), pad.left - 4, y + 3);
-  }
-
-  // Area
-  const grad = ctx.createLinearGradient(0, pad.top, 0, pad.top + cH);
-  grad.addColorStop(0, 'rgba(168,85,247,0.32)');
-  grad.addColorStop(1, 'rgba(168,85,247,0)');
-  ctx.beginPath();
-  ctx.moveTo(X(0), Y(data[0]));
-  data.forEach((v, i) => ctx.lineTo(X(i), Y(v)));
-  ctx.lineTo(X(data.length - 1), pad.top + cH);
-  ctx.lineTo(X(0), pad.top + cH);
-  ctx.closePath();
-  ctx.fillStyle = grad;
-  ctx.fill();
-
-  // Line
-  ctx.beginPath();
-  data.forEach((v, i) => (i === 0 ? ctx.moveTo(X(i), Y(v)) : ctx.lineTo(X(i), Y(v))));
-  ctx.strokeStyle = '#a855f7';
-  ctx.lineWidth = 2;
-  ctx.lineJoin = 'round';
-  ctx.stroke();
-
-  data.forEach((v, i) => {
-    ctx.beginPath();
-    ctx.arc(X(i), Y(v), 2.5, 0, Math.PI * 2);
-    ctx.fillStyle = '#eee8ff';
-    ctx.fill();
-    ctx.fillStyle = '#6b6490';
-    ctx.font = '9px Inter,sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText(labels[i], X(i), H - 6);
-  });
-}
 function shiftMonth(delta) {
   currentMonthOffset = Math.min(0, currentMonthOffset + delta);
   renderMonthPanel();
@@ -3986,7 +3592,6 @@ function renderMonthPanel() {
     </div>
   `;
   drawMonthChart(document.getElementById('month-chart'), y, m);
-  renderTrendPanel('month');
 }
 
 function drawMonthChart(canvas, y, m) {
@@ -4138,81 +3743,14 @@ function drawHourChart(canvas, data, labels) {
     ctx.fillText(labels[i], x + barW / 2, H - 8);
   });
 }
-/* ═══════════ HEATMAP 52 TUẦN ═══════════ */
-function renderHeatmap() {
-  const c = document.getElementById('study-heatmap');
-  if (!c) return;
-  const daily = Stats.daily();
-  const today = new Date(); today.setHours(0,0,0,0);
-  const start = addDays(today, -364);
-  // Align to Monday
-  const s = getWeekStart(start);
-  const tip = document.getElementById('heatmap-tip');
-  let html = '<div class="heatmap-grid">';
-  for (let w = 0; w < 53; w++) {
-    html += '<div class="heatmap-week">';
-    for (let d = 0; d < 7; d++) {
-      const cur = addDays(s, w * 7 + d);
-      if (cur > today) { html += '<span class="hm-cell hm-future"></span>'; continue; }
-      const k = formatDateInput(cur);
-      const mins = daily[k] || 0;
-      let lvl = 0;
-      if (mins >= 120) lvl = 4;
-      else if (mins >= 60) lvl = 3;
-      else if (mins >= 30) lvl = 2;
-      else if (mins > 0) lvl = 1;
-      const label = `${k}: ${mins ? fmtMins(mins) : 'nghỉ'}`;
-      html += `<span class="hm-cell hm-l${lvl}" data-tip="${label}" data-date="${k}"></span>`;
-    }
-    html += '</div>';
-  }
-  html += '</div>';
-  html += '<div class="heatmap-legend"><span>Ít</span><span class="hm-cell hm-l0"></span><span class="hm-cell hm-l1"></span><span class="hm-cell hm-l2"></span><span class="hm-cell hm-l3"></span><span class="hm-cell hm-l4"></span><span>Nhiều</span></div>';
-  c.innerHTML = html;
-  // tooltip hover
-  c.querySelectorAll('.hm-cell[data-tip]').forEach(el => {
-    el.addEventListener('mouseenter', () => { if (tip) { tip.textContent = el.dataset.tip; tip.classList.remove('hidden'); }});
-    el.addEventListener('mouseleave', () => { if (tip) tip.classList.add('hidden'); });
-    el.addEventListener('click', () => { if (el.dataset.date) showDayDetail(el.dataset.date); });
-  });
-}
-
-function showDayDetail(dateStr) {
-  const mins = Stats.minsByDay(dateStr);
-  const list = (state.sessions || []).filter(s => s.date.slice(0,10) === dateStr);
-  showToast(`${dateStr}: ${mins ? fmtMins(mins) : 'không học'}${list.length ? ' — ' + list.length + ' phiên' : ''}`, mins ? 'success' : 'info');
-}
-
-/* ═══════════ STUDY DASHBOARD + GOAL RING ═══════════ */
+/* ═══════════ STUDY DASHBOARD (streak + tổng quan) ═══════════ */
 function renderStudyDashboard() {
   const el = document.getElementById('study-dashboard');
   if (!el) return;
-  const todayMins = Stats.minsAt(new Date());
-  const goal = state.dailyGoalMins || 240;
-  const pct = Math.min(100, Math.round(todayMins / goal * 100));
-  const remain = Math.max(0, goal - todayMins);
   const streak = Stats.streak(-1);
   const weekTotal = Stats.weekTotal(getWeekStart(new Date()));
 
   el.innerHTML = `
-    <div class="dash-goal">
-      <div class="goal-ring-wrap">
-        <svg class="goal-ring" viewBox="0 0 44 44" width="72" height="72">
-          <circle cx="22" cy="22" r="16" class="goal-ring-bg"/>
-          <circle cx="22" cy="22" r="16" class="goal-ring-fg" style="stroke-dasharray:${pct * 1.005} 100.5"/>
-        </svg>
-        <span class="goal-ring-text">${pct}%</span>
-      </div>
-      <div class="dash-goal-meta">
-        <div class="dash-goal-title">Mục tiêu hôm nay</div>
-        <div class="dash-goal-vals"><b>${fmtMins(todayMins)}</b> / ${fmtMins(goal)} ${remain ? `— còn ${fmtMins(remain)}` : '✅ xong!'}</div>
-        <div class="dash-goal-bar"><div class="dash-goal-fill" style="width:${pct}%"></div></div>
-        <div class="dash-goal-actions">
-          <button class="btn btn-secondary btn-small" onclick="adjustDailyGoal(-30)">−30p</button>
-          <button class="btn btn-secondary btn-small" onclick="adjustDailyGoal(30)">+30p</button>
-        </div>
-      </div>
-    </div>
     <div class="dash-stats">
       ${statChip(weekTotal ? fmtHoursDec(weekTotal) + 'h' : '0h', 'Tuần này')}
       ${statChip('🔥 ' + streak.current + (streak.best > streak.current ? ' / best ' + streak.best : ''), 'Streak')}
@@ -4221,12 +3759,6 @@ function renderStudyDashboard() {
   `;
 }
 
-function adjustDailyGoal(delta) {
-  state.dailyGoalMins = Math.max(30, Math.min(720, (state.dailyGoalMins || 240) + delta));
-  saveState();
-  renderStudyDashboard();
-  showToast('Mục tiêu ngày: ' + fmtMins(state.dailyGoalMins), 'info');
-}
 /* ═══════════ EXPORT: CSV / JSON / ICS ═══════════ */
 const Export = {
   _download(name, content, mime) {
@@ -4595,7 +4127,6 @@ function renderWeeklyChart() {
   });
 }
 
-let historyFilter = { q: '', subject: '', type: '', range: '30' };
 const SUBJECTS = ['Toán', 'Vật lý', 'Hóa học', 'Sinh học', 'Ngôn ngữ', 'Lập trình', 'Tin học', 'Khác'];
 
 function getSubjectTags() {
@@ -4617,111 +4148,6 @@ function renderSubjectOptions() {
   dl.innerHTML = uniq.map(k => `<option value="${escapeHtml(k)}">`).join('');
 }
 
-function filteredSessions() {
-  const { q, subject, type, range } = historyFilter;
-  const from = range && range !== 'all' ? Date.now() - parseInt(range, 10) * 86400000 : 0;
-  const needle = q.trim().toLowerCase();
-  return [...state.sessions].reverse().filter(s => {
-    if (from && new Date(s.date).getTime() < from) return false;
-    if (subject && (s.subject || '') !== subject) return false;
-    if (type && (s.type || '') !== type) return false;
-    if (needle) {
-      const hay = `${s.subject || ''} ${s.tag || ''} ${s.notes || ''} ${s.date}`.toLowerCase();
-      if (!hay.includes(needle)) return false;
-    }
-    return true;
-  });
-}
-
-function applyHistoryFilter(key, value) {
-  historyFilter[key] = value;
-  renderSessionHistory();
-}
-
-function renderHistoryControls() {
-  const el = document.getElementById('history-controls');
-  if (!el) return;
-  const tags = getSubjectTags().slice(0, 10);
-  el.innerHTML = `
-    <input type="search" id="history-search" class="form-input" placeholder="🔎 Tìm môn, tag, ghi chú…"
-           value="${escapeHtml(historyFilter.q)}" oninput="applyHistoryFilter('q', this.value)">
-    <select class="form-input" onchange="applyHistoryFilter('subject', this.value)">
-      <option value="">Mọi môn</option>
-      ${tags.map(([k]) => `<option value="${escapeHtml(k)}" ${historyFilter.subject === k ? 'selected' : ''}>${escapeHtml(k)}</option>`).join('')}
-    </select>
-    <select class="form-input" onchange="applyHistoryFilter('type', this.value)">
-      <option value="">Mọi loại</option>
-      <option value="main" ${historyFilter.type === 'main' ? 'selected' : ''}>Buổi chính</option>
-      <option value="warmup" ${historyFilter.type === 'warmup' ? 'selected' : ''}>Khởi động</option>
-    </select>
-    <select class="form-input" onchange="applyHistoryFilter('range', this.value)">
-      ${[['7', '7 ngày'], ['30', '30 ngày'], ['90', '90 ngày'], ['365', '1 năm'], ['all', 'Tất cả']]
-        .map(([v, l]) => `<option value="${v}" ${historyFilter.range === v ? 'selected' : ''}>${l}</option>`).join('')}
-    </select>
-  `;
-}
-
-/** Thống kê theo môn học — chip xếp theo tổng phút. */
-function renderSubjectBreakdown() {
-  const el = document.getElementById('subject-breakdown');
-  if (!el) return;
-  const tags = getSubjectTags();
-  if (!tags.length) { el.innerHTML = ''; return; }
-  const max = tags[0][1] || 1;
-  el.innerHTML = tags.slice(0, 8).map(([k, v]) => `
-    <div class="subject-row" onclick="applyHistoryFilter('subject','${escapeHtml(k)}')" title="Lọc theo ${escapeHtml(k)}">
-      <span class="subject-name">${escapeHtml(k)}</span>
-      <div class="subject-bar"><div class="subject-fill" style="width:${(v / max * 100).toFixed(1)}%"></div></div>
-      <span class="subject-val">${fmtMins(v)}</span>
-    </div>`).join('');
-}
-
-/** Lịch sử phiên học — có tìm kiếm, lọc, tag, gom nhóm theo ngày. */
-function renderSessionHistory() {
-  const container = document.getElementById('session-history');
-  if (!container) return;
-  renderHistoryControls();
-  renderSubjectBreakdown();
-  const list = filteredSessions();
-
-  if (list.length === 0) {
-    container.innerHTML = `<p class="empty-state">${
-      (state.sessions || []).length ? 'Không có phiên học nào khớp bộ lọc.' : 'Chưa có phiên học nào. Bắt đầu ngay!'
-    }</p>`;
-    return;
-  }
-
-  const LIMIT = 50;
-  const shown = list.slice(0, LIMIT);
-  const totalMins = list.reduce((a, s) => a + (s.durationMins || 0), 0);
-
-  container.innerHTML =
-    `<div class="history-meta-bar">
-      <span>${list.length} phiên · ${fmtMins(totalMins)}</span>
-      ${list.length > LIMIT ? `<span class="hint">đang hiện ${LIMIT}/${list.length}</span>` : ''}
-    </div>` +
-    shown.map(s => {
-      const dateStr = new Date(s.date).toLocaleDateString('vi-VN', {
-        day: '2-digit', month: '2-digit', year: 'numeric',
-        hour: '2-digit', minute: '2-digit'
-      });
-      const typeEmoji = s.type === 'warmup' ? '🔥' : '🎯';
-      return `
-      <div class="history-item">
-        <div class="history-meta">
-          <span class="history-date">${dateStr}</span>
-          <span class="history-duration">${typeEmoji} ${s.durationMins} phút</span>
-          ${s.subject ? `<span class="history-subject">${escapeHtml(s.subject)}</span>` : ''}
-          ${s.tag ? `<span class="history-tag">#${escapeHtml(s.tag)}</span>` : ''}
-          ${s.notes ? `<span class="history-notes">"${escapeHtml(s.notes)}"</span>` : ''}
-        </div>
-        <div class="history-earnings">
-          <div style="color:var(--green)">+${s.expEarned} EXP</div>
-          <div style="color:var(--yellow)">+${s.coinsEarned} Xu</div>
-        </div>
-      </div>`;
-    }).join('');
-}
 
 // ═══════════════════════════════════════════
 // 10. TOASTS & CONFIRM MODAL
@@ -4796,10 +4222,7 @@ function resetData() {
           // Reload all UI
           updateHeaderUI();
           renderWeeklyChart();
-          renderSessionHistory();
-          renderShop();
           renderGoals();
-          renderPenalties();
           showStudySetup();
           showToast('🗑️ Đã xóa toàn bộ dữ liệu. Bắt đầu lại từ đầu!', 'info');
         }
@@ -4916,7 +4339,6 @@ function saveEditMode() {
       saveState();
       updateHeaderUI();
       renderWeeklyChart();
-      renderSessionHistory();
       closeEditMode();
       showToast('✅ Đã lưu thay đổi thành công!', 'success');
     }
@@ -4931,6 +4353,14 @@ function saveEditMode() {
 function resumeActiveSession() {
   const s = state.timerSession;
   if (!s) return;
+
+  // State cũ còn timer 'warmup' (tính năng đã xóa) → dọn dẹp
+  if (s.type === 'warmup') {
+    state.timerSession = null;
+    saveState();
+    showStudySetup();
+    return;
+  }
 
   if (s.type === 'break') {
     showStudyBreak();
@@ -5012,6 +4442,8 @@ function updateSessionInfoBox() {
   const totalChunks = Math.ceil(targetMins / chunkMins);
   document.getElementById('chunk-count').textContent = totalChunks;
   document.getElementById('chunk-duration-display').textContent = chunkMins;
+  // ⏰ Hiển thị dự kiến giờ buộc kết thúc (cập nhật realtime khi đổi input)
+  updateDeadlineEstimate();
 }
 
 function updateDailyInfo() {
@@ -5033,21 +4465,6 @@ function updateDailyInfo() {
   }
 }
 
-// Active pass timer refresh
-function refreshActivePassTimer() {
-  if (state.activeRestPass) {
-    if (Date.now() > state.activeRestPass.expiresAt) {
-      state.activeRestPass = null;
-      saveState();
-      showToast('⏰ Vé nghỉ ngơi đã hết hạn!', 'warning');
-    }
-    // Only refresh if shop tab is active
-    if (!document.getElementById('tab-shop').classList.contains('hidden')) {
-      renderInventory();
-    }
-  }
-}
-
 function init() {
   SoundEngine.init();
   loadState();
@@ -5062,7 +4479,6 @@ function init() {
   });
 
   // ── Study tab ──
-  document.getElementById('btn-warmup').addEventListener('click', startWarmup);
   document.getElementById('btn-start-session').addEventListener('click', startMainSession);
   document.getElementById('btn-pause').addEventListener('click', pauseSession);
   document.getElementById('btn-quit').addEventListener('click', quitSession);
@@ -5090,15 +4506,6 @@ function init() {
     updateSessionInfoBox();
   });
   document.getElementById('session-chunk').addEventListener('input', updateSessionInfoBox);
-
-  // ── Penalty tickets ──
-  document.getElementById('btn-create-penalty').addEventListener('click', createPenaltyTicket);
-  document.getElementById('dirty-mins-input').addEventListener('input', updateFinePreview);
-
-  // ── Shop tab ──
-  document.getElementById('btn-buy-passive').addEventListener('click', buyPassiveUpgrade);
-  document.getElementById('btn-buy-45').addEventListener('click', () => buyRestPass('45min'));
-  document.getElementById('btn-buy-3h').addEventListener('click', () => buyRestPass('3hr'));
 
   // ── Goals tab ──
   document.getElementById('btn-new-goal').addEventListener('click', openGoalModal);
@@ -5152,8 +4559,7 @@ function init() {
   }
 
   // ── Initial renders ──
-  renderStats();                 // thống kê (Stats + heatmap + dashboard + trend)
-  renderSessionHistory();
+  renderStats();                 // thống kê (biểu đồ + dashboard)
   renderSubjectOptions();
   maybeShowMonthlyRecap();
   updateMaxBetInfo();
@@ -5167,12 +4573,13 @@ function init() {
     }
   }
 
-  // ── Periodic refresh (rest passes, chart, penalties, daily bets) ──
-  setInterval(refreshActivePassTimer, 10000);
-  setInterval(checkOverduePenalties, 60000);
+  // ── Periodic refresh (deadline, chart, daily bets) ──
+  setInterval(() => {
+    updateDeadlineUI();       // ⏰ giữ countdown chính xác cả khi pause / tab ẩn
+    checkBlockDeadline();     // auto-fail quá ETA (kể cả khi app mở tab ẩn)
+  }, 1000);
   setInterval(checkDailyBets, 60000);   // check daily bets every minute
   setInterval(checkExpiredTasks, 30000); // check tasks every 30s
-  checkOverduePenalties();
   checkDailyBets();
   checkExpiredTasks();
   renderDailyBets();
@@ -5192,6 +4599,8 @@ function init() {
       }
       // Resume timer if one is active
       if (state.timerSession) {
+        // ⏰ Quá deadline khi đang ẩn tab → auto-fail ngay
+        if (checkBlockDeadline()) return;
         const remaining = getRemainingMs();
         if (remaining <= 0 && !state.timerSession.isPaused) {
           onTimerComplete();
@@ -5255,7 +4664,6 @@ function init() {
 
   // ── Clear data buttons ──
   document.getElementById('btn-clear-sessions').addEventListener('click', clearSessions);
-  document.getElementById('btn-clear-penalties').addEventListener('click', clearPenalties);
   document.getElementById('btn-clear-daily-bets').addEventListener('click', clearDailyBets);
   document.getElementById('btn-clear-tasks-done').addEventListener('click', clearFinishedTasks);
   document.getElementById('btn-clear-goals').addEventListener('click', clearGoals);

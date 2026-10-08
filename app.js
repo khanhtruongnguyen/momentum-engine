@@ -526,6 +526,122 @@ const SoundEngine = (() => {
 })();
 
 // ═══════════════════════════════════════════
+// THEME MANAGER (SÁNG SANG TRỌNG / TỐI NGUYÊN BẢN)
+// ═══════════════════════════════════════════
+
+const ThemeManager = {
+  KEY: 'momentum_theme',
+
+  getTheme() {
+    try {
+      return localStorage.getItem(this.KEY) || 'light';
+    } catch (e) {
+      return 'light';
+    }
+  },
+
+  applyTheme(theme, save = true) {
+    if (theme !== 'light' && theme !== 'dark') theme = 'light';
+    document.documentElement.setAttribute('data-theme', theme);
+    if (save) {
+      try { localStorage.setItem(this.KEY, theme); } catch (e) {}
+    }
+
+    // Update Header Button
+    const btn = document.getElementById('theme-toggle-btn');
+    const icon = document.getElementById('theme-toggle-icon');
+    const text = document.getElementById('theme-toggle-text');
+    if (icon && text) {
+      if (theme === 'light') {
+        icon.textContent = '☀️';
+        text.textContent = 'Sáng';
+        if (btn) btn.title = 'Đang ở chế độ Sáng sang trọng — Bấm để đổi sang Tối';
+      } else {
+        icon.textContent = '🌙';
+        text.textContent = 'Tối';
+        if (btn) btn.title = 'Đang ở chế độ Tối nguyên bản — Bấm để đổi sang Sáng';
+      }
+    }
+
+    // Update Settings Cards
+    const optLight = document.getElementById('theme-opt-light');
+    const optDark = document.getElementById('theme-opt-dark');
+    const badgeLight = document.getElementById('theme-badge-light');
+    const badgeDark = document.getElementById('theme-badge-dark');
+    if (optLight && optDark) {
+      if (theme === 'light') {
+        optLight.classList.add('active');
+        optDark.classList.remove('active');
+        if (badgeLight) badgeLight.textContent = 'Đang dùng';
+        if (badgeDark) badgeDark.textContent = 'Chọn';
+      } else {
+        optDark.classList.add('active');
+        optLight.classList.remove('active');
+        if (badgeDark) badgeDark.textContent = 'Đang dùng';
+        if (badgeLight) badgeLight.textContent = 'Chọn';
+      }
+    }
+
+    // Re-render canvas charts if initialized
+    if (typeof renderStats === 'function') {
+      try { renderStats(); } catch (e) {}
+    }
+  },
+
+  toggle() {
+    const cur = this.getTheme();
+    const next = cur === 'light' ? 'dark' : 'light';
+    this.applyTheme(next);
+    if (typeof showToast === 'function') {
+      showToast(
+        next === 'light'
+          ? '☀️ Đã chuyển sang giao diện Sáng (Executive Luxury)'
+          : '🌙 Đã chuyển sang giao diện Tối (Dark Glass)',
+        'info'
+      );
+    }
+    if (typeof SoundEngine !== 'undefined' && SoundEngine.click) {
+      SoundEngine.click();
+    }
+  },
+
+  init() {
+    const theme = this.getTheme();
+    this.applyTheme(theme, false);
+
+    const btn = document.getElementById('theme-toggle-btn');
+    if (btn) {
+      btn.addEventListener('click', () => this.toggle());
+    }
+
+    const optLight = document.getElementById('theme-opt-light');
+    const optDark = document.getElementById('theme-opt-dark');
+    if (optLight) {
+      optLight.addEventListener('click', () => {
+        if (this.getTheme() !== 'light') {
+          this.applyTheme('light');
+          if (typeof showToast === 'function') {
+            showToast('☀️ Đã chuyển sang giao diện Sáng (Executive Luxury)', 'info');
+          }
+          if (typeof SoundEngine !== 'undefined' && SoundEngine.click) SoundEngine.click();
+        }
+      });
+    }
+    if (optDark) {
+      optDark.addEventListener('click', () => {
+        if (this.getTheme() !== 'dark') {
+          this.applyTheme('dark');
+          if (typeof showToast === 'function') {
+            showToast('🌙 Đã chuyển sang giao diện Tối (Dark Glass)', 'info');
+          }
+          if (typeof SoundEngine !== 'undefined' && SoundEngine.click) SoundEngine.click();
+        }
+      });
+    }
+  }
+};
+
+// ═══════════════════════════════════════════
 // 1. STATE MANAGEMENT
 // ═══════════════════════════════════════════
 
@@ -1908,12 +2024,34 @@ function updateDeadlineUI() {
   });
 }
 
+/** Lấy thời gian đệm dự phòng (mặc định 60 phút = 1 tiếng, cho phép nghỉ/tạm dừng thoải mái). */
+function getDeadlineBufferMins() {
+  try {
+    const val = localStorage.getItem('momentum_deadline_buffer_mins');
+    if (val !== null) {
+      const parsed = parseInt(val, 10);
+      if (!isNaN(parsed) && parsed >= 0) return parsed;
+    }
+  } catch (e) {}
+  return 60; // Mặc định 60 phút (1 tiếng)
+}
+
+function setDeadlineBufferMins(mins) {
+  try {
+    localStorage.setItem('momentum_deadline_buffer_mins', mins);
+  } catch (e) {}
+  updateDeadlineEstimate();
+}
+
 /** Dòng dự kiến trên màn setup — cập nhật khi đổi tổng thời gian / phiên. */
 function updateDeadlineEstimate() {
   const el = document.getElementById('deadline-estimate');
   if (!el) return;
-  const targetMins = parseInt(document.getElementById('session-target-total').value, 10);
-  const chunkMins = parseInt(document.getElementById('session-chunk').value, 10);
+  const targetInput = document.getElementById('session-target-total');
+  const chunkInput = document.getElementById('session-chunk');
+  if (!targetInput || !chunkInput) return;
+  const targetMins = parseInt(targetInput.value, 10);
+  const chunkMins = parseInt(chunkInput.value, 10);
   if (isNaN(targetMins) || targetMins < 25 || isNaN(chunkMins) || chunkMins < 5 || chunkMins > targetMins) {
     el.textContent = '';
     el.classList.remove('has-value');
@@ -1921,12 +2059,13 @@ function updateDeadlineEstimate() {
   }
   const totalChunks = Math.ceil(targetMins / chunkMins);
   const breakBudgetMins = (totalChunks - 1) * 5;
-  const totalWithBreak = targetMins + breakBudgetMins;
-  const deadlineAt = Date.now() + totalWithBreak * 60 * 1000;
+  const bufferMins = getDeadlineBufferMins();
+  const totalWithBreakAndBuffer = targetMins + breakBudgetMins + bufferMins;
+  const deadlineAt = Date.now() + totalWithBreakAndBuffer * 60 * 1000;
   el.classList.add('has-value');
   el.innerHTML =
-    `⏰ Buổi học sẽ bị chốt giờ lúc <span class="deadline-time">${formatDeadlineClock(deadlineAt)}</span>` +
-    ` <span class="deadline-warn">(sau ~${formatDeadlineDuration(totalWithBreak)} nữa — nghỉ cũng tính!)</span>`;
+    `⏰ Buổi học buộc kết thúc trước <span class="deadline-time">${formatDeadlineClock(deadlineAt)}</span>` +
+    ` <span class="deadline-warn">(sau ~${formatDeadlineDuration(totalWithBreakAndBuffer)} — gồm ${formatDeadlineDuration(bufferMins)} đệm tạm dừng)</span>`;
 }
 
 // ═══════════════════════════════════════════
@@ -1999,9 +2138,10 @@ function startMainSession() {
   const durationMs = firstChunkMins * 60 * 1000;
 
   // ⏰ DEADLINE: giờ tạo + ETA (targetMins) + ngân sách nghỉ giữa phiên
-  //    (5p × số lần nghỉ). Pause KHÔNG gia hạn deadline — quá hạn → auto-fail.
+  //    (5p × số lần nghỉ) + NGƯỠNG ĐỆM DỰ PHÒNG (mặc định 60p = 1 tiếng) cho phép tạm dừng.
   const breakBudgetMins = (totalChunks - 1) * 5;
-  const deadlineAt = Date.now() + (targetMins + breakBudgetMins) * 60 * 1000;
+  const bufferMins = getDeadlineBufferMins();
+  const deadlineAt = Date.now() + (targetMins + breakBudgetMins + bufferMins) * 60 * 1000;
 
   // Create activeBlock to track the entire macro-session
   state.activeBlock = {
@@ -2012,7 +2152,8 @@ function startMainSession() {
     totalChunks,
     currentChunk: 1,
     startedAt: Date.now(),
-    deadlineAt
+    deadlineAt,
+    bufferMins
   };
 
   // Create timer for the first chunk
@@ -3464,6 +3605,37 @@ function deleteAchievement(id) {
 let currentStatMode = 'week'; // 'week' | 'month' | 'quarter' | 'hour'
 let currentQuarterYear = null; // năm đang xem ở chế độ quý
 let currentMonthOffset = 0;    // 0 = tháng này, -1 = tháng trước
+let selectedWeekMonday = null; // Date (Thứ 2) của tuần đang xem. null => tuần hiện tại
+
+// ── Helpers xác định tuần trong quý ──
+function getQuarterWeeks(year, qi) {
+  const QRANGE = [[0, 3], [3, 6], [6, 9], [9, 12]];
+  const [qStartM, qEndM] = QRANGE[qi];
+  const qStartDate = new Date(year, qStartM, 1);
+  const qEndDate   = new Date(year, qEndM, 0); // Ngày cuối cùng của quý
+  const weeks = [];
+  let w = getWeekStart(qStartDate);
+  while (w <= qEndDate) {
+    weeks.push(new Date(w));
+    w = new Date(w.getTime() + 7 * 86400000);
+  }
+  return weeks.slice(0, 14);
+}
+
+function getQuarterIndexForWeek(monday) {
+  const thurs = addDays(monday, 3);
+  return Math.floor(thurs.getMonth() / 3);
+}
+
+function getYearForWeek(monday) {
+  const thurs = addDays(monday, 3);
+  return thurs.getFullYear();
+}
+
+function getSelectedWeekMonday() {
+  if (selectedWeekMonday) return selectedWeekMonday;
+  return getWeekStart(new Date());
+}
 
 /** Chuyển panel thống kê hiển thị + render lại. */
 function switchStatMode(mode) {
@@ -3520,20 +3692,214 @@ function compareBadge(cmp) {
   return `<span class="cmp-badge ${up ? 'cmp-up' : 'cmp-down'}">${up ? '▲' : '▼'} ${Math.abs(cmp.pct).toFixed(0)}% vs ${escapeHtml(cmp.prevLabel)}</span>`;
 }
 
+function compareWeekBadge(monday) {
+  const curr = Stats.weekTotal(monday);
+  const prevMon = addDays(monday, -7);
+  const prev = Stats.weekTotal(prevMon);
+  const delta = curr - prev;
+  const prevLabel = `Tuần trước (${prevMon.getDate()}/${prevMon.getMonth() + 1})`;
+  if (prev === 0) {
+    if (curr === 0) {
+      return `<span class="cmp-badge cmp-flat">0p vs ${escapeHtml(prevLabel)}</span>`;
+    }
+    return `<span class="cmp-badge cmp-up">+${fmtMins(curr)} vs ${escapeHtml(prevLabel)}</span>`;
+  }
+  const pct = ((curr - prev) / prev) * 100;
+  const up = delta >= 0;
+  return `<span class="cmp-badge ${up ? 'cmp-up' : 'cmp-down'}">${up ? '▲' : '▼'} ${Math.abs(pct).toFixed(0)}% vs ${escapeHtml(prevLabel)}</span>`;
+}
+
+/** Renders week navigation dropdown and buttons. */
+function renderWeeklyNav() {
+  const currentMonday = getWeekStart(new Date());
+  const monday = getSelectedWeekMonday();
+  const year = getYearForWeek(monday);
+  const qi = getQuarterIndexForWeek(monday);
+
+  const quarterSelect = document.getElementById('stat-quarter-select');
+  if (quarterSelect && quarterSelect.value !== String(qi)) {
+    quarterSelect.value = String(qi);
+  }
+
+  const quarterTag = document.getElementById('week-quarter-tag');
+  if (quarterTag) {
+    quarterTag.textContent = `Quý ${qi + 1}/${year}`;
+  }
+
+  const weeks = getQuarterWeeks(year, qi);
+  const weekSelect = document.getElementById('stat-week-select');
+  const nowKey = formatDateInput(currentMonday);
+  const selKey = formatDateInput(monday);
+
+  if (weekSelect) {
+    weekSelect.innerHTML = weeks.map((w, idx) => {
+      const wKey = formatDateInput(w);
+      const wEnd = addDays(w, 6);
+      const isCur = wKey === nowKey;
+      const isSelected = wKey === selKey;
+      const isFuture = w > currentMonday;
+      const totalMins = Stats.weekTotal(w);
+      const totalStr = totalMins > 0 ? (totalMins >= 60 ? (totalMins / 60).toFixed(1) + 'h' : totalMins + 'p') : '0h';
+
+      const label = `Tuần ${idx + 1} (${w.getDate()}/${w.getMonth() + 1} – ${wEnd.getDate()}/${wEnd.getMonth() + 1})` +
+        (isCur ? ' • Tuần này ⭐' : '') +
+        (totalMins > 0 ? ` • ${totalStr}` : (isFuture ? ' (Sắp tới)' : ' • 0h'));
+
+      return `<option value="${wKey}" ${isSelected ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+    }).join('');
+  }
+
+  // Stepper buttons
+  const prevBtn = document.getElementById('btn-prev-week');
+  const nextBtn = document.getElementById('btn-next-week');
+  const curBtn = document.getElementById('btn-current-week');
+
+  const curIdx = weeks.findIndex(w => formatDateInput(w) === selKey);
+
+  if (prevBtn) {
+    prevBtn.disabled = (curIdx <= 0 && qi === 0);
+  }
+
+  if (nextBtn) {
+    const isAtLatest = (selKey === nowKey) || (curIdx >= weeks.length - 1 && qi >= 3) || (curIdx >= 0 && weeks[curIdx] >= currentMonday);
+    nextBtn.disabled = isAtLatest;
+  }
+
+  if (curBtn) {
+    curBtn.classList.toggle('hidden', selKey === nowKey);
+  }
+}
+
+function prevWeek() {
+  const monday = getSelectedWeekMonday();
+  const year = getYearForWeek(monday);
+  const qi = getQuarterIndexForWeek(monday);
+  const weeks = getQuarterWeeks(year, qi);
+  const selKey = formatDateInput(monday);
+  const idx = weeks.findIndex(w => formatDateInput(w) === selKey);
+
+  if (idx > 0) {
+    selectedWeekMonday = weeks[idx - 1];
+  } else if (qi > 0) {
+    const prevWeeks = getQuarterWeeks(year, qi - 1);
+    selectedWeekMonday = prevWeeks[prevWeeks.length - 1];
+  } else if (year > 2020) {
+    const prevWeeks = getQuarterWeeks(year - 1, 3);
+    selectedWeekMonday = prevWeeks[prevWeeks.length - 1];
+  }
+  SoundEngine.click();
+  renderStats();
+}
+
+function nextWeek() {
+  const currentMonday = getWeekStart(new Date());
+  const monday = getSelectedWeekMonday();
+  const year = getYearForWeek(monday);
+  const qi = getQuarterIndexForWeek(monday);
+  const weeks = getQuarterWeeks(year, qi);
+  const selKey = formatDateInput(monday);
+  const idx = weeks.findIndex(w => formatDateInput(w) === selKey);
+
+  let nextMon = null;
+  if (idx >= 0 && idx < weeks.length - 1) {
+    nextMon = weeks[idx + 1];
+  } else if (qi < 3) {
+    const nextWeeks = getQuarterWeeks(year, qi + 1);
+    nextMon = nextWeeks[0];
+  }
+
+  if (nextMon && nextMon <= currentMonday) {
+    selectedWeekMonday = nextMon;
+    SoundEngine.click();
+    renderStats();
+  }
+}
+
+function onWeekSelectChange(e) {
+  const val = e.target.value;
+  if (!val) return;
+  const parts = val.split('-');
+  selectedWeekMonday = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+  SoundEngine.click();
+  renderStats();
+}
+
+function onQuarterSelectChange(e) {
+  const qi = parseInt(e.target.value, 10);
+  const now = new Date();
+  const curMonday = getWeekStart(now);
+  const curQi = getQuarterIndexForWeek(curMonday);
+  const year = now.getFullYear();
+  const weeks = getQuarterWeeks(year, qi);
+
+  if (qi === curQi) {
+    selectedWeekMonday = curMonday;
+  } else if (qi < curQi) {
+    let lastWithStudy = null;
+    weeks.forEach(w => {
+      if (Stats.weekTotal(w) > 0) lastWithStudy = w;
+    });
+    selectedWeekMonday = lastWithStudy || weeks[weeks.length - 1];
+  } else {
+    selectedWeekMonday = weeks[0];
+  }
+  SoundEngine.click();
+  renderStats();
+}
+
+function resetToCurrentWeek() {
+  selectedWeekMonday = getWeekStart(new Date());
+  SoundEngine.click();
+  renderStats();
+  showToast('📅 Đã trở về tuần hiện tại!', 'info');
+}
+
+function jumpToQuarterWeeks(qi) {
+  const now = new Date();
+  const curMonday = getWeekStart(now);
+  const curQi = getQuarterIndexForWeek(curMonday);
+  const year = now.getFullYear();
+  const weeks = getQuarterWeeks(year, qi);
+
+  if (qi === curQi) {
+    selectedWeekMonday = curMonday;
+  } else {
+    let lastWithStudy = null;
+    weeks.forEach(w => {
+      if (Stats.weekTotal(w) > 0) lastWithStudy = w;
+    });
+    selectedWeekMonday = lastWithStudy || weeks[weeks.length - 1];
+  }
+
+  SoundEngine.click();
+  switchStatMode('week');
+  showToast(`📅 Đang xem các tuần của Quý ${qi + 1}/${year}!`, 'info');
+}
+
 /** Renders the 4-chip summary row below the weekly bar chart. */
 function renderWeeklySummary() {
   const el = document.getElementById('stat-week-summary');
   if (!el) return;
-  const monday = getWeekStart(new Date());
+  const monday = getSelectedWeekMonday();
   const dayData = Stats.weekArray(monday);
   const totalMins  = dayData.reduce((a, b) => a + b, 0);
   const activeDays = dayData.filter(m => m > 0).length;
   const peakMins   = Math.max(...dayData);
   const endOfWeek  = addDays(monday, 6);
-  const fmtD = d => `${d.getDate()}/${d.getMonth()+1}`;
+  const fmtD = d => `${d.getDate()}/${d.getMonth() + 1}`;
+
+  const currentMonday = getWeekStart(new Date());
+  const isCurrentWeek = formatDateInput(monday) === formatDateInput(currentMonday);
+  const year = getYearForWeek(monday);
+  const qi = getQuarterIndexForWeek(monday);
+  const weeks = getQuarterWeeks(year, qi);
+  const weekIdx = weeks.findIndex(w => formatDateInput(w) === formatDateInput(monday));
+  const weekNumStr = weekIdx >= 0 ? `Tuần ${weekIdx + 1}` : '';
 
   const labelEl = document.getElementById('stat-week-label');
-  if (labelEl) labelEl.textContent = `Tuần ${fmtD(monday)} – ${fmtD(endOfWeek)}`;
+  if (labelEl) {
+    labelEl.textContent = `Tuần ${fmtD(monday)} – ${fmtD(endOfWeek)} (${weekNumStr} • Quý ${qi + 1}/${year}${isCurrentWeek ? ' • Tuần này ⭐' : ''})`;
+  }
 
   el.innerHTML = [
     statChip(fmtHoursDec(totalMins) + 'h', 'Tổng tuần'),
@@ -3543,7 +3909,9 @@ function renderWeeklySummary() {
   ].join('');
 
   const cmpEl = document.getElementById('stat-week-compare');
-  if (cmpEl) cmpEl.innerHTML = compareBadge(Stats.compare('week'));
+  if (cmpEl) cmpEl.innerHTML = compareWeekBadge(monday);
+
+  renderWeeklyNav();
 }
 
 function shiftMonth(delta) {
@@ -3615,8 +3983,9 @@ function drawMonthChart(canvas, y, m) {
   const gap = cW / days, barW = Math.max(2, gap * 0.64);
   const today = new Date();
 
-  ctx.strokeStyle = 'rgba(120,100,255,0.07)';
-  ctx.fillStyle = '#6b6490';
+  const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+  ctx.strokeStyle = isLight ? 'rgba(15, 23, 42, 0.06)' : 'rgba(120,100,255,0.07)';
+  ctx.fillStyle = isLight ? '#64748b' : '#6b6490';
   ctx.font = '9px Inter,sans-serif';
   ctx.textAlign = 'right';
   for (let i = 0; i <= 3; i++) {
@@ -3632,8 +4001,13 @@ function drawMonthChart(canvas, y, m) {
     const isToday = y === today.getFullYear() && m === today.getMonth() && i + 1 === today.getDate();
     if (h > 0) {
       const g = ctx.createLinearGradient(x, yTop, x, yTop + h);
-      if (isToday) { g.addColorStop(0, '#a855f7'); g.addColorStop(1, '#6366f1'); }
-      else { g.addColorStop(0, 'rgba(99,102,241,0.58)'); g.addColorStop(1, 'rgba(99,102,241,0.2)'); }
+      if (isLight) {
+        if (isToday) { g.addColorStop(0, '#4338ca'); g.addColorStop(1, '#3b82f6'); }
+        else { g.addColorStop(0, '#94a3b8'); g.addColorStop(1, '#cbd5e1'); }
+      } else {
+        if (isToday) { g.addColorStop(0, '#a855f7'); g.addColorStop(1, '#6366f1'); }
+        else { g.addColorStop(0, 'rgba(99,102,241,0.58)'); g.addColorStop(1, 'rgba(99,102,241,0.2)'); }
+      }
       const r = Math.min(2, barW / 2);
       ctx.beginPath();
       ctx.moveTo(x + r, yTop); ctx.lineTo(x + barW - r, yTop);
@@ -3642,12 +4016,15 @@ function drawMonthChart(canvas, y, m) {
       ctx.lineTo(x, yTop + r); ctx.quadraticCurveTo(x, yTop, x + r, yTop);
       ctx.closePath();
       ctx.fillStyle = g;
-      if (isToday) { ctx.shadowColor = 'rgba(168,85,247,0.5)'; ctx.shadowBlur = 8; }
+      if (isToday) {
+        ctx.shadowColor = isLight ? 'rgba(67, 56, 202, 0.25)' : 'rgba(168,85,247,0.5)';
+        ctx.shadowBlur = 8;
+      }
       ctx.fill();
       ctx.shadowBlur = 0;
     }
     if (i % 5 === 0 || i + 1 === days) {
-      ctx.fillStyle = isToday ? '#eee8ff' : '#6b6490';
+      ctx.fillStyle = isToday ? (isLight ? '#0f172a' : '#eee8ff') : (isLight ? '#94a3b8' : '#6b6490');
       ctx.font = (isToday ? 'bold ' : '') + '9px Inter,sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(String(i + 1), x + barW / 2, H - 6);
@@ -3700,8 +4077,9 @@ function drawHourChart(canvas, data, labels) {
   const n = data.length, gap = cW / n, barW = Math.max(8, gap * 0.62);
   const peakIdx = data.indexOf(Math.max(...data));
 
-  ctx.strokeStyle = 'rgba(120,100,255,0.08)';
-  ctx.fillStyle = '#6b6490';
+  const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+  ctx.strokeStyle = isLight ? 'rgba(15, 23, 42, 0.06)' : 'rgba(120,100,255,0.08)';
+  ctx.fillStyle = isLight ? '#64748b' : '#6b6490';
   ctx.font = '10px Inter,sans-serif';
   ctx.textAlign = 'right';
   for (let i = 0; i <= 3; i++) {
@@ -3717,8 +4095,13 @@ function drawHourChart(canvas, data, labels) {
     const isPeak = i === peakIdx && mins > 0;
     if (h > 0) {
       const g = ctx.createLinearGradient(x, y, x, y + h);
-      if (isPeak) { g.addColorStop(0, '#f59e0b'); g.addColorStop(1, '#ec4899'); }
-      else { g.addColorStop(0, 'rgba(99,102,241,0.62)'); g.addColorStop(1, 'rgba(99,102,241,0.18)'); }
+      if (isLight) {
+        if (isPeak) { g.addColorStop(0, '#d97706'); g.addColorStop(1, '#b45309'); }
+        else { g.addColorStop(0, '#3b82f6'); g.addColorStop(1, '#60a5fa'); }
+      } else {
+        if (isPeak) { g.addColorStop(0, '#f59e0b'); g.addColorStop(1, '#ec4899'); }
+        else { g.addColorStop(0, 'rgba(99,102,241,0.62)'); g.addColorStop(1, 'rgba(99,102,241,0.18)'); }
+      }
       const r = Math.min(4, barW / 2);
       ctx.beginPath();
       ctx.moveTo(x + r, y); ctx.lineTo(x + barW - r, y);
@@ -3727,17 +4110,20 @@ function drawHourChart(canvas, data, labels) {
       ctx.quadraticCurveTo(x, y, x + r, y);
       ctx.closePath();
       ctx.fillStyle = g;
-      if (isPeak) { ctx.shadowColor = 'rgba(245,158,11,0.5)'; ctx.shadowBlur = 12; }
+      if (isPeak) {
+        ctx.shadowColor = isLight ? 'rgba(217, 119, 6, 0.25)' : 'rgba(245,158,11,0.5)';
+        ctx.shadowBlur = 10;
+      }
       ctx.fill();
       ctx.shadowBlur = 0;
     }
     if (mins > 0) {
-      ctx.fillStyle = isPeak ? '#f59e0b' : '#8b80b0';
+      ctx.fillStyle = isPeak ? (isLight ? '#b45309' : '#f59e0b') : (isLight ? '#64748b' : '#8b80b0');
       ctx.font = 'bold 10px Inter,sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(mins >= 60 ? fmtHoursDec(mins) + 'h' : mins + 'p', x + barW / 2, y - 5);
     }
-    ctx.fillStyle = isPeak ? '#eee8ff' : '#6b6490';
+    ctx.fillStyle = isPeak ? (isLight ? '#0f172a' : '#eee8ff') : (isLight ? '#64748b' : '#6b6490');
     ctx.font = (isPeak ? 'bold ' : '') + '10px Inter,sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText(labels[i], x + barW / 2, H - 8);
@@ -3911,18 +4297,7 @@ function renderQuarterCharts() {
     const canvas = document.getElementById(`quarter-chart-${qi+1}`);
     if (!canvas) return;
 
-    // Collect all Monday-starts whose week overlaps with this quarter
-    const qStartDate = new Date(year, qStartM, 1);
-    const qEndDate   = new Date(year, qEndM, 0);   // last day of quarter
-    const weeks = [];
-    let w = getWeekStart(qStartDate);
-    // include this week even if it started slightly before quarter
-    while (w <= qEndDate) {
-      weeks.push(new Date(w));
-      w = new Date(w.getTime() + 7 * 86400000);
-    }
-    // Trim to max 14 (some quarters have 13-14 weeks)
-    const displayWeeks = weeks.slice(0, 14);
+    const displayWeeks = getQuarterWeeks(year, qi);
     const data = displayWeeks.map(ws => weekMap[formatDateInput(ws)] || 0);
 
     const qTotal = data.reduce((a, b) => a + b, 0);
@@ -3950,14 +4325,15 @@ function renderQuarterCharts() {
     const gap  = cW / n;
     const [ct, cb, cg] = THEMES[qi];
 
+    const isLight = document.documentElement.getAttribute('data-theme') === 'light';
     // Grid
-    ctx.strokeStyle = 'rgba(120,100,255,0.07)';
+    ctx.strokeStyle = isLight ? 'rgba(15, 23, 42, 0.06)' : 'rgba(120,100,255,0.07)';
     ctx.lineWidth = 1;
     [0, 1, 2, 3].forEach(i => {
       const y = pad.top + (cH / 3) * i;
       ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W-pad.right, y); ctx.stroke();
       const v = Math.round(maxM - (maxM / 3) * i);
-      ctx.fillStyle = '#6b6490';
+      ctx.fillStyle = isLight ? '#64748b' : '#6b6490';
       ctx.font = '9px Inter,sans-serif';
       ctx.textAlign = 'right';
       ctx.fillText(v >= 60 ? (v/60).toFixed(1)+'h' : v+'p', pad.left-3, y+3);
@@ -3994,7 +4370,7 @@ function renderQuarterCharts() {
         ctx.fillText(mins>=60?(mins/60).toFixed(1)+'h':mins+'p', x+barW/2, y-3);
       }
       // Week label
-      ctx.fillStyle = isNow ? '#eee8ff' : '#6b6490';
+      ctx.fillStyle = isNow ? (isLight ? '#0f172a' : '#eee8ff') : (isLight ? '#64748b' : '#6b6490');
       ctx.font = (isNow?'bold ':'') + '8px Inter,sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(`T${i+1}`, x+barW/2, H-pad.bottom+13);
@@ -4037,10 +4413,9 @@ function renderWeeklyChart() {
 
   ctx.clearRect(0, 0, W, H);
 
-  // Get current week (Mon-Sun)
-  const monday = getWeekStart(new Date());
-  const today = new Date();
-  const dayOfWeek = today.getDay(); // 0=Sun
+  // Selected week (Mon-Sun)
+  const monday = getSelectedWeekMonday();
+  const todayStr = formatDateInput(new Date());
 
   const dayLabels = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'];
   const dayData = Stats.weekArray(monday); // phút theo ngày — từ Stats
@@ -4052,8 +4427,9 @@ function renderWeeklyChart() {
   const barW = chartW / 7 * 0.55;
   const gap = chartW / 7;
 
+  const isLight = document.documentElement.getAttribute('data-theme') === 'light';
   // Grid lines
-  ctx.strokeStyle = 'rgba(120, 100, 255, 0.08)';
+  ctx.strokeStyle = isLight ? 'rgba(15, 23, 42, 0.06)' : 'rgba(120, 100, 255, 0.08)';
   ctx.lineWidth = 1;
   const gridLines = 4;
   for (let i = 0; i <= gridLines; i++) {
@@ -4065,7 +4441,7 @@ function renderWeeklyChart() {
 
     // Y-axis labels
     const val = Math.round(maxMins - (maxMins / gridLines) * i);
-    ctx.fillStyle = '#6b6490';
+    ctx.fillStyle = isLight ? '#64748b' : '#6b6490';
     ctx.font = '10px Inter, sans-serif';
     ctx.textAlign = 'right';
     ctx.fillText(val + 'p', padding.left - 8, y + 4);
@@ -4077,15 +4453,33 @@ function renderWeeklyChart() {
     const x = padding.left + gap * i + (gap - barW) / 2;
     const y = padding.top + chartH - barH;
 
+    const dayDate = addDays(monday, i);
+    const isToday = formatDateInput(dayDate) === todayStr;
+
     // Bar gradient
     const grad = ctx.createLinearGradient(x, y, x, y + barH);
-    const isToday = i === ((dayOfWeek + 6) % 7);
-    if (isToday) {
-      grad.addColorStop(0, '#a855f7');
-      grad.addColorStop(1, '#6366f1');
+    if (isLight) {
+      if (isToday) {
+        grad.addColorStop(0, '#4338ca');
+        grad.addColorStop(1, '#3b82f6');
+      } else if (mins > 0) {
+        grad.addColorStop(0, '#3b82f6');
+        grad.addColorStop(1, '#93c5fd');
+      } else {
+        grad.addColorStop(0, '#94a3b8');
+        grad.addColorStop(1, '#cbd5e1');
+      }
     } else {
-      grad.addColorStop(0, 'rgba(99, 102, 241, 0.6)');
-      grad.addColorStop(1, 'rgba(99, 102, 241, 0.2)');
+      if (isToday) {
+        grad.addColorStop(0, '#a855f7');
+        grad.addColorStop(1, '#6366f1');
+      } else if (mins > 0) {
+        grad.addColorStop(0, 'rgba(168, 85, 247, 0.85)');
+        grad.addColorStop(1, 'rgba(99, 102, 241, 0.6)');
+      } else {
+        grad.addColorStop(0, 'rgba(99, 102, 241, 0.4)');
+        grad.addColorStop(1, 'rgba(99, 102, 241, 0.15)');
+      }
     }
 
     // Rounded top corners
@@ -4104,7 +4498,7 @@ function renderWeeklyChart() {
 
     // Glow effect for today
     if (isToday) {
-      ctx.shadowColor = 'rgba(168, 85, 247, 0.4)';
+      ctx.shadowColor = isLight ? 'rgba(67, 56, 202, 0.25)' : 'rgba(168, 85, 247, 0.4)';
       ctx.shadowBlur = 12;
       ctx.fill();
       ctx.shadowBlur = 0;
@@ -4112,7 +4506,7 @@ function renderWeeklyChart() {
 
     // Value on top
     if (mins > 0) {
-      ctx.fillStyle = isToday ? '#a855f7' : '#8b80b0';
+      ctx.fillStyle = isToday ? (isLight ? '#4338ca' : '#a855f7') : (isLight ? '#334155' : '#c4b5fd');
       ctx.font = 'bold 11px Inter, sans-serif';
       ctx.textAlign = 'center';
       const hours = mins / 60;
@@ -4120,7 +4514,7 @@ function renderWeeklyChart() {
     }
 
     // Day label
-    ctx.fillStyle = isToday ? '#eee8ff' : '#6b6490';
+    ctx.fillStyle = isToday ? (isLight ? '#0f172a' : '#eee8ff') : (isLight ? '#64748b' : '#6b6490');
     ctx.font = (isToday ? 'bold ' : '') + '11px Inter, sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText(dayLabels[i], x + barW / 2, H - padding.bottom + 18);
@@ -4466,6 +4860,7 @@ function updateDailyInfo() {
 }
 
 function init() {
+  ThemeManager.init();
   SoundEngine.init();
   loadState();
   updateHeaderUI();
@@ -4651,6 +5046,18 @@ function init() {
     else                         { inp.type = 'password'; btn.textContent = '👁 Hiện'; }
   });
 
+  // ── Cài đặt đệm hạn giờ buổi học (Deadline Buffer) ──
+  const bufSelect = document.getElementById('deadline-buffer-select');
+  if (bufSelect) {
+    bufSelect.value = String(getDeadlineBufferMins());
+    bufSelect.addEventListener('change', () => {
+      const val = parseInt(bufSelect.value, 10) || 60;
+      setDeadlineBufferMins(val);
+      showToast(`⏱️ Đã đặt đệm hạn giờ là ${formatDeadlineDuration(val)}!`, 'info');
+      SoundEngine.click();
+    });
+  }
+
   // ── Task tab ──
   document.getElementById('btn-new-task').addEventListener('click', openTaskModal);
   document.getElementById('btn-cancel-task').addEventListener('click', closeTaskModal);
@@ -4686,6 +5093,33 @@ function init() {
   document.querySelectorAll('.stat-mode-btn').forEach(btn => {
     btn.addEventListener('click', () => switchStatMode(btn.dataset.mode));
   });
+
+  // ── Week navigation listeners ──
+  const prevWBtn = document.getElementById('btn-prev-week');
+  if (prevWBtn) prevWBtn.addEventListener('click', prevWeek);
+
+  const nextWBtn = document.getElementById('btn-next-week');
+  if (nextWBtn) nextWBtn.addEventListener('click', nextWeek);
+
+  const wSelect = document.getElementById('stat-week-select');
+  if (wSelect) wSelect.addEventListener('change', onWeekSelectChange);
+
+  const qSelect = document.getElementById('stat-quarter-select');
+  if (qSelect) qSelect.addEventListener('change', onQuarterSelectChange);
+
+  const curWBtn = document.getElementById('btn-current-week');
+  if (curWBtn) curWBtn.addEventListener('click', resetToCurrentWeek);
+
+  [1, 2, 3, 4].forEach(qi => {
+    const qp = document.getElementById(`qpanel-${qi}`);
+    if (qp) qp.addEventListener('click', () => jumpToQuarterWeeks(qi - 1));
+  });
+
+  // Expose global helpers for inline attributes if needed
+  window.jumpToQuarterWeeks = jumpToQuarterWeeks;
+  window.prevWeek = prevWeek;
+  window.nextWeek = nextWeek;
+  window.resetToCurrentWeek = resetToCurrentWeek;
 
   // ── Reset Data ──
   document.getElementById('btn-reset-data').addEventListener('click', resetData);

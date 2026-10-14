@@ -764,7 +764,10 @@ function refreshSharedState() {
 }
 
 function saveState() {
-  state.updatedAt = new Date().toISOString();   // marker cho Gist merge (last-write-wins)
+  // Each mutation must be newer than the version this device has already observed,
+  // including several clicks in one millisecond or a device clock behind the cloud.
+  const previous = Date.parse(state.updatedAt || '') || 0;
+  state.updatedAt = new Date(Math.max(Date.now(), previous + 1)).toISOString();
   if (!state.deviceId) state.deviceId = getDeviceId();
   try {
     persistLocalState();
@@ -843,6 +846,7 @@ function mergeStates(local, remote, mode = 'lww') {
     if (takeFrom[k] !== undefined) out[k] = takeFrom[k];
     else if (skipFrom[k] !== undefined) out[k] = skipFrom[k];
   });
+  out.updatedAt = takeFrom.updatedAt || null;
 
   return out;
 }
@@ -1368,6 +1372,24 @@ const GistSync = (() => {
   let _pushTimer = null;      // debounce timer id
   let _isSyncing = false;     // prevent concurrent sync
   let _initialized = false;   // prevent push before first pull is done
+  let _pendingPush = false;
+  let _pendingPull = null;
+
+  function syncSignature(value) {
+    return JSON.stringify([...APPEND_ONLY_KEYS, ...LWW_KEYS, 'deletedSessions', 'updatedAt']
+      .map(key => [key, value[key] ?? DEFAULT_STATE[key] ?? null]));
+  }
+
+  function drainPending(allowPush = true) {
+    if (_isSyncing) return;
+    if (_pendingPull) {
+      const next = _pendingPull;
+      _pendingPull = null;
+      syncFromRemote(next.options).then(result => next.resolve.forEach(resolve => resolve(result)));
+    } else if (allowPush && _pendingPush && _initialized && isConfigured()) {
+      debouncedPush();
+    }
+  }
 
   /* ── Helpers ─────────────────────────────────────────────────────── */
 
@@ -1447,9 +1469,9 @@ const GistSync = (() => {
    * để luôn chỉ giữ tối đa MAX_BACKUPS bản gần nhất.
    * Trả về: { main, backup, removed[] }
    */
-  async function patchWithBackups(token, gistId, content) {
+  async function patchWithBackups(token, gistId, content, current = null) {
     // 1) Xem hiện có bao nhiêu backup
-    const cur = await fetchGist(token, gistId);
+    const cur = current || await fetchGist(token, gistId);
     const existing = listBackupFiles(cur.files);
 
     // 2) Tính bản cũ cần xoá (để sau khi thêm 1 bản mới vẫn ≤ MAX_BACKUPS)
@@ -1506,10 +1528,21 @@ const GistSync = (() => {
 
     setStatus('Đang đồng bộ…', 'syncing');
     const data = await fetchGist(token, gistId);
-    const file  = data.files && data.files[GIST_FILENAME];
-    if (!file || !file.content) return null;  // empty / first use
+    return readGistState(data, token);
+  }
 
-    const remoteState = JSON.parse(file.content);
+  async function readGistState(data, token) {
+    const file = data.files && data.files[GIST_FILENAME];
+    if (!file) return null;
+    let content = file.content;
+    if (file.truncated) {
+      if (!file.raw_url) throw new Error('File Gist bị rút gọn nhưng thiếu đường dẫn bản đầy đủ.');
+      const response = await fetch(file.raw_url, { headers: { Authorization: `Bearer ${token}` } });
+      if (!response.ok) throw new Error(`GET raw gist failed: ${response.status}`);
+      content = await response.text();
+    }
+    if (!content) return null;
+    const remoteState = JSON.parse(content);
     // Remove internal sync metadata before merging
     delete remoteState._syncedAt;
     return remoteState;
@@ -1522,10 +1555,23 @@ const GistSync = (() => {
     if (!token || !gistId) return;
     if (!_initialized) return;  // wait until first pull completed
 
+    // Read before writing so this device cannot erase sessions just uploaded by another.
+    const current = await fetchGist(token, gistId);
+    const remoteState = await readGistState(current, token);
+    refreshSharedState();
+    if (remoteState && Object.keys(remoteState).length > 1) {
+      state = { ...createDefaultState(), ...mergeStates(state, remoteState) };
+      state.deviceId = getDeviceId();
+      Stats.invalidate();
+      persistLocalState();
+      restoreStudyUI();
+      updateHeaderUI();
+      renderStats();
+    }
     const content = JSON.stringify({ ...state, _syncedAt: new Date().toISOString() }, null, 2);
     let usedBackups = false;
     try {
-      const r = await patchWithBackups(token, gistId, content);
+      const r = await patchWithBackups(token, gistId, content, current);
       if (r.removed && r.removed.length) {
         console.info(`GistSync: tạo ${r.backup}, xoá ${r.removed.join(', ')}`);
       }
@@ -1541,22 +1587,29 @@ const GistSync = (() => {
   /* ── Public API ──────────────────────────────────────────────────── */
 
   function debouncedPush() {
+    _pendingPush = true;
     if (_pushTimer) clearTimeout(_pushTimer);
     _pushTimer = setTimeout(async () => {
+      _pushTimer = null;
       if (_isSyncing) return;
       const { token, gistId } = getSettings();
       if (!token || !gistId || !_initialized) return;
       _isSyncing = true;
+      _pendingPush = false;
+      let succeeded = false;
       try {
         setStatus('Đang đẩy dữ liệu…', 'syncing');
         await push();
+        succeeded = true;
         const now = new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
         setStatus(`✅ Đã đồng bộ lúc ${now}`, 'ok');
       } catch (err) {
+        _pendingPush = true;
         console.warn('GistSync push error:', err);
         setStatus(`❌ Lỗi đẩy: ${err.message}`, 'error');
       } finally {
         _isSyncing = false;
+        drainPending(succeeded);
       }
     }, 2000); // 2-second debounce
   }
@@ -1565,13 +1618,23 @@ const GistSync = (() => {
   // mode: 'append' (chỉ union sessions/intervals — dùng cho pull giữa 2 phiên đang mở)
   //       | 'lww'  (union append-only + last-write-wins cho phần còn lại)
   async function syncFromRemote({ silent = false, mode = 'lww' } = {}) {
-    if (_isSyncing) return;
+    if (_isSyncing) {
+      return new Promise(resolve => {
+        if (!_pendingPull) _pendingPull = { options: { silent, mode }, resolve: [] };
+        else {
+          _pendingPull.options.silent = _pendingPull.options.silent && silent;
+          if (mode === 'lww') _pendingPull.options.mode = mode;
+        }
+        _pendingPull.resolve.push(resolve);
+      });
+    }
     const { token, gistId } = getSettings();
     if (!token || !gistId) {
       _initialized = true;
       return;
     }
     _isSyncing = true;
+    let succeeded = false;
     if (!silent) setStatus('Đang tải dữ liệu…', 'syncing');
     try {
       const remoteState = await pull();
@@ -1580,21 +1643,22 @@ const GistSync = (() => {
         // Remote có dữ liệu thật — GỘP thay vì ghi đè (tránh mất 2 thiết bị song song)
         state = { ...createDefaultState(), ...mergeStates(state, remoteState, mode) };
         state.deviceId = getDeviceId();   // luôn giữ ID của máy này
+        if (syncSignature(state) !== syncSignature(remoteState)) _pendingPush = true;
         Stats.invalidate();
         try {
           persistLocalState();
         } catch {}
         restoreStudyUI();
         updateHeaderUI();
-        renderWeeklyChart();
-        renderWeeklySummary();
+        renderStats();
         renderGoals();
         renderDailyBets();
         renderTasks();
         renderAchievements();
         renderStudyDashboard();
         if (!silent) showToast('☁️ Đã tải & GỘP dữ liệu từ Gist!', 'info');
-      }
+      } else _pendingPush = true;
+      succeeded = true;
       const now = new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
       setStatus(`✅ Đã đồng bộ lúc ${now}`, 'ok');
       try { await renderBackupList(); } catch {}
@@ -1605,6 +1669,7 @@ const GistSync = (() => {
     } finally {
       _isSyncing = false;
       _initialized = true;
+      drainPending(succeeded);
     }
   }
 
@@ -5190,7 +5255,7 @@ function init() {
     if (!document.hidden) {
       checkBlockDeadline();
       // Pull latest data from Gist silently when user returns to the tab
-      if (GistSync.isConfigured() && !state.timerSession && !state.activeBlock && !state._pendingReward) {
+      if (GistSync.isConfigured()) {
         GistSync.syncFromRemote({ silent: true });
       }
       // Resume timer if one is active
@@ -5218,7 +5283,8 @@ function init() {
   // ── Save state before unload ──
   window.addEventListener('beforeunload', () => {
     refreshSharedState();
-    saveState();
+    // Closing an unchanged tab must not make its old data look newer than the cloud.
+    try { persistLocalState(); } catch {}
   });
   window.addEventListener('storage', event => {
     if (event.key !== STORAGE_KEY && event.key !== null) return;
@@ -5226,6 +5292,9 @@ function init() {
     restoreStudyUI();
     updateHeaderUI();
     renderStats();
+  });
+  window.addEventListener('online', () => {
+    if (GistSync.isConfigured()) GistSync.syncFromRemote({ silent: true });
   });
 
   // ── Settings tab buttons ──

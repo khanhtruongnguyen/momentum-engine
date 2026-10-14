@@ -664,6 +664,7 @@ const DEFAULT_STATE = {
 
   // Session history: [{id,date,durationMins,notes,expEarned,coinsEarned,type,subject,endTime?}]
   sessions: [],
+  deletedSessions: {}, // id -> deletion timestamp; prevents stale sync restoring study hours
 
   // Contracts: [{id,name,startDate,endDate,totalStake,winMult,lossMult,
   //              paymentType,dailyPayments:{[dateStr]:true},status:'active'|'success'|'failed',
@@ -705,7 +706,8 @@ const DEFAULT_STATE = {
   // } | null
   activeBlock: null,
   // Active timer session (persisted for anti-throttle)
-  timerSession: null
+  timerSession: null,
+  _pendingReward: null
   // timerSession shape: {
   //   type: 'warmup' | 'main' | 'break',
   //   startTime: number (ms epoch),
@@ -721,25 +723,51 @@ const DEFAULT_STATE = {
 };
 
 let state = {};
+let lastStoredState;
+
+function createDefaultState() {
+  return JSON.parse(JSON.stringify(DEFAULT_STATE));
+}
 
 function loadState() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
+    lastStoredState = raw;
     if (raw) {
-      state = { ...DEFAULT_STATE, ...JSON.parse(raw) };
+      state = { ...createDefaultState(), ...JSON.parse(raw) };
     } else {
-      state = { ...DEFAULT_STATE };
+      state = createDefaultState();
     }
   } catch {
-    state = { ...DEFAULT_STATE };
+    state = createDefaultState();
   }
+  Stats.invalidate();
+}
+
+function persistLocalState() {
+  const serialized = JSON.stringify(state);
+  localStorage.setItem(STORAGE_KEY, serialized);
+  lastStoredState = serialized;
+}
+
+// Another tab can finish, pause or replace the timer before its storage event arrives.
+function refreshSharedState() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (lastStoredState === undefined || raw === lastStoredState) return false;
+    const incoming = raw ? JSON.parse(raw) : {};
+    state = { ...createDefaultState(), ...incoming };
+    lastStoredState = raw;
+    Stats.invalidate();
+    return true;
+  } catch { return false; }
 }
 
 function saveState() {
   state.updatedAt = new Date().toISOString();   // marker cho Gist merge (last-write-wins)
   if (!state.deviceId) state.deviceId = getDeviceId();
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    persistLocalState();
   } catch (e) {
     console.warn('Failed to save state:', e);
   }
@@ -782,7 +810,7 @@ const APPEND_ONLY_KEYS = ['sessions', 'intervals', 'achievements', 'penaltyTicke
 const LWW_KEYS = [
   'coins', 'exp', 'totalExp', 'level', 'passiveCoinUpgrades',
   'restPasses', 'activeRestPass', 'contracts', 'dailyBets', 'tasks',
-  'activeBlock', 'timerSession', 'dailyGoalMins', 'recap',
+  'activeBlock', 'timerSession', '_pendingReward', 'dailyGoalMins', 'recap',
 ];
 
 /**
@@ -799,6 +827,11 @@ function mergeStates(local, remote, mode = 'lww') {
   APPEND_ONLY_KEYS.forEach(k => {
     out[k] = unionById(local[k] || [], remote[k] || []);
   });
+  out.deletedSessions = { ...(local.deletedSessions || {}) };
+  Object.entries(remote.deletedSessions || {}).forEach(([id, at]) => {
+    if (!out.deletedSessions[id] || at > out.deletedSessions[id]) out.deletedSessions[id] = at;
+  });
+  out.sessions = out.sessions.filter(s => !out.deletedSessions[s.id]);
 
   if (mode === 'append') return out;
 
@@ -832,27 +865,69 @@ function addDays(d, n) {
 }
 
 /** Map { 'YYYY-MM-DD': totalMins } từ state.sessions (theo ngày LOCAL). */
+function getTimerStudySegments(s, end) {
+  const pauses = s.pauseSpans || [];
+  const knownPauseMs = pauses.reduce((sum, p) => sum + p.end - p.start, 0);
+  // Older saved timers only have the total paused duration.
+  let cursor = s.startTime + Math.max(0, (s.accumulatedPauseTime || 0) - knownPauseMs);
+  const segments = [];
+  pauses.forEach(p => {
+    if (p.start > cursor) segments.push({ start: cursor, end: Math.min(end, p.start) });
+    cursor = Math.max(cursor, p.end);
+  });
+  if (end > cursor) segments.push({ start: cursor, end });
+  return segments;
+}
+
+// Split actual study time at local day/hour boundaries; exclude breaks and pauses.
+function forEachStudySlice(session, boundary, visit) {
+  if (!Array.isArray(session.studySegments)) {
+    const date = new Date(session.date);
+    if (Number.isFinite(date.getTime())) visit(date, session.durationMins || 0);
+    return;
+  }
+  session.studySegments.forEach(({ start, end }) => {
+    let cursor = start;
+    while (cursor < end) {
+      const date = new Date(cursor);
+      const next = new Date(cursor);
+      if (boundary === 'day') next.setHours(24, 0, 0, 0);
+      else next.setHours(Math.floor(next.getHours() / 4) * 4 + 4, 0, 0, 0);
+      const stop = Math.min(end, next.getTime());
+      if (!(stop > cursor)) break;
+      visit(date, (stop - cursor) / 60000);
+      cursor = stop;
+    }
+  });
+}
+
 function buildDailyMinutesMap() {
   const map = {};
   (state.sessions || []).forEach(s => {
     if (!s || !s.date) return;
-    const key = formatDateInput(new Date(s.date));
-    map[key] = (map[key] || 0) + (s.durationMins || 0);
+    forEachStudySlice(s, 'day', (date, mins) => {
+      const key = formatDateInput(date);
+      map[key] = (map[key] || 0) + Math.round(mins * 60000);
+    });
   });
+  Object.keys(map).forEach(key => { map[key] /= 60000; });
   return map;
 }
 
 const Stats = {
   _cache: null,
   _cacheKey: null,
+  _source: null,
 
-  invalidate() { this._cache = null; this._cacheKey = null; },
+  invalidate() { this._cache = null; this._cacheKey = null; this._source = null; },
 
   daily() {
     const arr = state.sessions || [];
-    const key = arr.length + ':' + (arr.slice(-1)[0] || {}).id;
-    if (this._cache && this._cacheKey === key) return this._cache;
+    const key = arr.length + ':' + (arr.slice(-1)[0] || {}).id + ':' +
+      state.updatedAt + ':' + new Date().getTimezoneOffset();
+    if (this._cache && this._source === arr && this._cacheKey === key) return this._cache;
     this._cache = buildDailyMinutesMap();
+    this._source = arr;
     this._cacheKey = key;
     return this._cache;
   },
@@ -937,8 +1012,7 @@ const Stats = {
   },
 
   /** So sánh kỳ hiện tại với kỳ liền trước. mode: week|month|quarter|year */
-  compare(mode) {
-    const now = new Date();
+  compare(mode, now = new Date()) {
     let curr, prev, prevLabel;
     if (mode === 'week') {
       const m = getWeekStart(now);
@@ -974,13 +1048,40 @@ const Stats = {
   compareYearToDate(y1, y2, to = null) {
     const end = to || new Date();
     const build = y => {
+      const lastDay = new Date(y, end.getMonth() + 1, 0).getDate();
+      const cutoff = new Date(y, end.getMonth(), Math.min(end.getDate(), lastDay));
       let sum = 0;
       let cur = new Date(y, 0, 1);
-      while (cur <= end) { sum += this.minsAt(cur); cur = addDays(cur, 1); }
+      while (cur <= cutoff) { sum += this.minsAt(cur); cur = addDays(cur, 1); }
       return sum;
     };
     const a = build(y1), b = build(y2);
     return { a, b, diff: a - b, pct: b > 0 ? ((a - b) / b) * 100 : null };
+  },
+
+  compareMonthYears(y, m, throughDay) {
+    const sum = year => {
+      const days = Math.min(throughDay, new Date(year, m + 1, 0).getDate());
+      let total = 0;
+      for (let day = 1; day <= days; day++) total += this.minsAt(new Date(year, m, day));
+      return total;
+    };
+    const a = sum(y), b = sum(y - 1);
+    return { a, b, diff: a - b, pct: b > 0 ? ((a - b) / b) * 100 : null };
+  },
+
+  quarterWeeks(y, qi) {
+    const weeks = getQuarterWeeks(y, qi);
+    const start = new Date(y, qi * 3, 1), end = new Date(y, qi * 3 + 3, 1);
+    const minutes = weeks.map(monday => {
+      let total = 0;
+      for (let i = 0; i < 7; i++) {
+        const day = addDays(monday, i);
+        if (day >= start && day < end) total += this.minsAt(day);
+      }
+      return total;
+    });
+    return { weeks, minutes };
   },
 
   /** Phân bố phút học theo khung giờ — 6 bucket × 4 tiếng. */
@@ -988,10 +1089,11 @@ const Stats = {
     const buckets = new Array(6).fill(0);
     (state.sessions || []).forEach(s => {
       if (!s || !s.date) return;
-      const h = new Date(s.date).getHours();
-      buckets[Math.min(5, Math.floor(h / 4))] += (s.durationMins || 0);
+      forEachStudySlice(s, 'hour', (date, mins) => {
+        buckets[Math.min(5, Math.floor(date.getHours() / 4))] += Math.round(mins * 60000);
+      });
     });
-    return buckets;
+    return buckets.map(ms => ms / 60000);
   },
 };
 
@@ -1474,13 +1576,15 @@ const GistSync = (() => {
     try {
       const remoteState = await pull();
       if (remoteState && Object.keys(remoteState).length > 1) {
+        refreshSharedState();
         // Remote có dữ liệu thật — GỘP thay vì ghi đè (tránh mất 2 thiết bị song song)
-        state = { ...DEFAULT_STATE, ...mergeStates(state, remoteState, mode) };
+        state = { ...createDefaultState(), ...mergeStates(state, remoteState, mode) };
         state.deviceId = getDeviceId();   // luôn giữ ID của máy này
         Stats.invalidate();
         try {
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+          persistLocalState();
         } catch {}
+        restoreStudyUI();
         updateHeaderUI();
         renderWeeklyChart();
         renderWeeklySummary();
@@ -1668,9 +1772,10 @@ const GistSync = (() => {
       if (!f || !f.content) throw new Error('Không tìm thấy file backup');
       const parsed = JSON.parse(f.content);
       delete parsed._syncedAt;
-      state = { ...DEFAULT_STATE, ...parsed, deviceId: getDeviceId() };
+      state = { ...createDefaultState(), ...parsed, deviceId: getDeviceId() };
       Stats.invalidate();
-      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch {}
+      try { persistLocalState(); } catch {}
+      restoreStudyUI();
       updateHeaderUI();
       renderWeeklyChart(); renderWeeklySummary();
       renderGoals(); renderDailyBets();
@@ -1712,7 +1817,7 @@ function getCoinMultiplier() {
   return 1 + (state.passiveCoinUpgrades * 0.10);
 }
 
-function addExp(amount) {
+function addExp(amount, persist = true) {
   if (amount <= 0) return;
   state.exp += amount;
   state.totalExp += amount;
@@ -1729,11 +1834,11 @@ function addExp(amount) {
       levelEl.classList.add('level-up-flash');
     }
   }
-  saveState();
+  if (persist) saveState();
   updateHeaderUI();
 }
 
-function addCoins(amount) {
+function addCoins(amount, persist = true) {
   state.coins += amount;
 
   // ── Trừng phạt phá sản: nợ quá -500 Xu ──
@@ -1747,7 +1852,7 @@ function addCoins(amount) {
     SoundEngine.coinEarned();
   }
 
-  saveState();
+  if (persist) saveState();
   updateHeaderUI();
   const coinEl = document.getElementById('player-coins');
   if (coinEl) {
@@ -1826,13 +1931,17 @@ function switchTab(tabName) {
 let timerRAF = null;
 const CIRCUMFERENCE = 2 * Math.PI * 100; // r=100 in SVG
 
+function getTimerEndTime(s) {
+  return s.startTime + s.durationMs + (s.accumulatedPauseTime || 0);
+}
+
 function getRemainingMs() {
   const s = state.timerSession;
   if (!s) return 0;
   if (s.isPaused) {
     // Time frozen at the moment pause was clicked
     const elapsed = s.pauseStartTime - s.startTime - s.accumulatedPauseTime;
-    return s.durationMs - elapsed;
+    return Math.max(0, s.durationMs - elapsed);
   }
   const now = Date.now();
   const elapsed = now - s.startTime - s.accumulatedPauseTime;
@@ -1960,6 +2069,18 @@ function stopTimerLoop() {
 const DEADLINE_GRACE_MS = 3000; // ân hạn nhỏ để chunk cuối kịp hoàn thành vừa đúng deadline
 
 function checkBlockDeadline() {
+  refreshSharedState();
+  // Settle elapsed timers first, even if RAF was suspended or the page was closed.
+  // Eligibility uses the actual finish time, never the time this callback runs.
+  let s = state.timerSession;
+  const deadline = state.activeBlock?.deadlineAt;
+  if (s && !s.isPaused && getRemainingMs() <= 0 &&
+      (!deadline || getTimerEndTime(s) <= deadline + DEADLINE_GRACE_MS)) {
+    onTimerComplete();
+    // A completed chunk can leave an already elapsed break behind.
+    s = state.timerSession;
+    if (s?.type === 'break' && getRemainingMs() <= 0) onTimerComplete();
+  }
   const block = state.activeBlock;
   if (!block || block.completedMins >= block.targetMins) return false;
   if (!block.deadlineAt) return false;
@@ -1973,7 +2094,7 @@ function failExpiredBlock() {
   const betAmount = state.activeBlock ? (state.activeBlock.betAmount || 0) : 0;
   if (betAmount > 0) {
     const loss = betAmount * 10;
-    addCoins(-loss);
+    addCoins(-loss, false);
     showToast(`⏰ Hết giờ! Buổi học thất bại — mất ${loss} Xu (10× cược).`, 'error');
     SoundEngine.betLose();
   } else {
@@ -2095,6 +2216,8 @@ function showStudyBreak() {
 }
 
 function startMainSession() {
+  checkBlockDeadline();
+  if (state.activeBlock || state.timerSession || state._pendingReward) return;
   const targetInput = document.getElementById('session-target-total');
   const chunkInput = document.getElementById('session-chunk');
   const targetMins = parseInt(targetInput.value, 10);
@@ -2192,13 +2315,19 @@ function updateBetActiveDisplay() {
 }
 
 function pauseSession() {
+  const previous = state.timerSession;
+  if (checkBlockDeadline()) return;
   const s = state.timerSession;
-  if (!s) return;
+  if (!s || s !== previous || s.type !== 'main') return;
 
   if (s.isPaused) {
     // Resume
-    const pauseDuration = Date.now() - s.pauseStartTime;
+    const resumedAt = Date.now();
+    const pauseDuration = resumedAt - s.pauseStartTime;
+    s.pauseSpans = s.pauseSpans || [];
+    s.pauseSpans.push({ start: s.pauseStartTime, end: resumedAt });
     s.accumulatedPauseTime += pauseDuration;
+    s.targetEndTime = getTimerEndTime(s);
     s.isPaused = false;
     s.pauseStartTime = null;
     saveState();
@@ -2225,11 +2354,13 @@ function quitSession() {
       ? `Bạn sẽ mất ${betAmount * 10} Xu (10× cược). EXP/Xu từ các phiên đã hoàn thành vẫn được giữ. Chắc chắn bỏ cuộc?`
       : 'Bạn sẽ không nhận thêm EXP hay Xu. Chắc chắn bỏ cuộc?',
     () => {
+      checkBlockDeadline();
+      if (state.activeBlock !== block || state._pendingReward) return;
       SoundEngine.quitSound();
       // Apply bet loss
       if (betAmount > 0) {
         const loss = betAmount * 10;
-        addCoins(-loss);
+        addCoins(-loss, false);
         showToast(`💸 Mất ${loss} Xu (10× cược)! EXP/Xu phiên trước vẫn giữ.`, 'error');
       } else {
         showToast('🏳️ Đã bỏ cuộc — EXP/Xu phiên trước vẫn giữ.', 'warning');
@@ -2246,9 +2377,16 @@ function quitSession() {
 }
 
 function onTimerComplete() {
-  stopTimerLoop();
+  refreshSharedState();
   const s = state.timerSession;
-  if (!s) return;
+  if (!s || s.isPaused || getRemainingMs() > 0) return;
+  const completedAt = getTimerEndTime(s);
+  if (state.activeBlock?.deadlineAt &&
+      completedAt > state.activeBlock.deadlineAt + DEADLINE_GRACE_MS) {
+    checkBlockDeadline();
+    return;
+  }
+  stopTimerLoop();
 
   if (s.type === 'break') {
     // Break done — show "start next chunk" button, DON'T auto-start
@@ -2270,27 +2408,38 @@ function onTimerComplete() {
     return;
   }
 
+  const existing = state.sessions.find(entry => entry.id === `chunk-${s.startTime}`);
   const chunkMins = s.sessionDurationMins;
 
   // Award EXP & Xu IMMEDIATELY for this chunk
   const earnedExp = chunkMins;
   const earnedCoins = Math.round(chunkMins * getCoinMultiplier());
-  addExp(earnedExp);
-  addCoins(earnedCoins);
+  if (!existing) {
+    addExp(earnedExp, false);
+    addCoins(earnedCoins, false);
+  }
 
   // Record this chunk in session history
-  state.sessions.push({
-    id: Date.now().toString(),
-    date: new Date().toISOString(),
+  if (!existing && !state.deletedSessions?.[`chunk-${s.startTime}`]) state.sessions.push({
+    id: `chunk-${s.startTime}`,
+    date: new Date(completedAt).toISOString(),
+    startTime: s.startTime,
+    endTime: completedAt,
+    studySegments: getTimerStudySegments(s, completedAt),
     durationMins: chunkMins,
     notes: '',
     expEarned: earnedExp,
     coinsEarned: earnedCoins,
+    blockCompletedMins: block.completedMins + chunkMins,
     type: 'pomodoro-chunk'
   });
 
   // Update block progress
-  block.completedMins += chunkMins;
+  block.completedMins = existing
+    ? Math.max(block.completedMins, existing.blockCompletedMins ||
+      Math.min(block.targetMins, block.currentChunk * block.chunkMins))
+    : block.completedMins + chunkMins;
+  Stats.invalidate();
 
   SoundEngine.chunkComplete();
   showToast(`✅ Phiên ${block.currentChunk} hoàn thành! +${earnedExp} EXP, +${earnedCoins} Xu`, 'success');
@@ -2301,6 +2450,7 @@ function onTimerComplete() {
     let betWinnings = 0;
     if (block.betAmount > 0) {
       betWinnings = block.betAmount * 2;
+      if (!existing) addCoins(betWinnings, false);
     }
 
     const totalEarnedCoins = Math.round(block.completedMins * getCoinMultiplier());
@@ -2337,14 +2487,17 @@ function onTimerComplete() {
       SoundEngine.victory();
     }
 
-    // Store pending bet reward (EXP/Xu already awarded per chunk)
+    // Only notes remain pending; all rewards are already committed with completion.
     state._pendingReward = {
       betWinnings,
+      betAwarded: true,
+      sessionId: `chunk-${s.startTime}`,
       totalMins: block.completedMins,
       totalChunks: block.currentChunk
     };
     state.timerSession = null;
     saveState();
+    renderStats();
 
     document.getElementById('retro-notes').value = '';
     document.getElementById('retrospective-modal').classList.remove('hidden');
@@ -2361,12 +2514,13 @@ function onTimerComplete() {
   // ═══ Not done yet — auto-start 5-minute break ═══
   block.currentChunk++;
   state.timerSession = null;
-  saveState();
-  startBreak();
+  startBreak(completedAt);
+  if (getRemainingMs() <= 0) onTimerComplete();
   renderWeeklyChart();
 }
 
 function saveRetrospective() {
+  refreshSharedState();
   const notes   = document.getElementById('retro-notes').value.trim();
   const subject = (document.getElementById('retro-subject')?.value || '').trim();
   const tag     = (document.getElementById('retro-tag')?.value || '').trim();
@@ -2374,19 +2528,23 @@ function saveRetrospective() {
   if (!r) return;
 
   // Award bet winnings (EXP/Xu already awarded per chunk)
-  if (r.betWinnings > 0) {
-    addCoins(r.betWinnings);
+  if (r.betWinnings > 0 && !r.betAwarded) {
+    addCoins(r.betWinnings, false);
   }
 
   // Store notes + subject + tag on the last chunk session entry
-  if (state.sessions.length > 0) {
-    if (notes) state.sessions[state.sessions.length - 1].notes = notes;
-    if (subject) state.sessions[state.sessions.length - 1].subject = subject;
-    if (tag) state.sessions[state.sessions.length - 1].tag = tag;
+  const session = r.sessionId
+    ? state.sessions.find(s => s.id === r.sessionId)
+    : state.sessions[state.sessions.length - 1];
+  if (session) {
+    if (notes) session.notes = notes;
+    if (subject) session.subject = subject;
+    if (tag) session.tag = tag;
+    session.updatedAt = new Date().toISOString();
     Stats.invalidate();
   }
 
-  delete state._pendingReward;
+  state._pendingReward = null;
   state.activeBlock = null;
   saveState();
 
@@ -2401,12 +2559,12 @@ function saveRetrospective() {
   renderWeeklyChart();
 }
 
-function startBreak() {
+function startBreak(startedAt = Date.now()) {
   const durationMs = 5 * 60 * 1000;
   state.timerSession = {
     type: 'break',
-    startTime: Date.now(),
-    targetEndTime: Date.now() + durationMs,
+    startTime: startedAt,
+    targetEndTime: startedAt + durationMs,
     durationMs,
     isPaused: false,
     pauseStartTime: null,
@@ -2456,6 +2614,9 @@ function startBreakTimerLoop() {
 }
 
 function skipBreak() {
+  if (checkBlockDeadline()) return;
+  if (!state.activeBlock || state._pendingReward) return;
+  if (state.timerSession && state.timerSession.type !== 'break') return;
   if (breakRAF) cancelAnimationFrame(breakRAF);
   breakRAF = null;
   state.timerSession = null;
@@ -2474,7 +2635,10 @@ function showBreakDone() {
 }
 
 function startNextChunk() {
+  if (checkBlockDeadline()) return;
   const block = state.activeBlock;
+  if (state._pendingReward || state.timerSession ||
+      (block && block.completedMins >= block.targetMins)) return;
   if (!block) {
     showStudySetup();
     return;
@@ -2865,9 +3029,7 @@ function renderContractCard(c) {
  * Returns total study minutes logged for a given local date string (YYYY-MM-DD).
  */
 function getDayStudyMins(dateStr) {
-  return (state.sessions || []).filter(s => {
-    return formatDateInput(new Date(s.date)) === dateStr;
-  }).reduce((sum, s) => sum + (s.durationMins || 0), 0);
+  return Stats.minsByDay(dateStr);
 }
 
 /**
@@ -2875,6 +3037,7 @@ function getDayStudyMins(dateStr) {
  * Called on load and every minute.
  */
 function checkDailyBets() {
+  checkBlockDeadline();
   if (!state.dailyBets || state.dailyBets.length === 0) return;
   const todayStr = formatDateInput(new Date());
   let changed = false;
@@ -3341,9 +3504,14 @@ function clearSessions() {
   showConfirm('📊 Xóa dữ liệu thống kê?',
     'Xóa toàn bộ lịch sử phiên học? Thống kê tuần và tiến độ phiếu cược ngày cũng sẽ bị xóa.',
     () => {
+      refreshSharedState();
+      state.deletedSessions = state.deletedSessions || {};
+      const deletedAt = new Date().toISOString();
+      state.sessions.forEach(s => { state.deletedSessions[s.id] = deletedAt; });
       state.sessions = [];
+      Stats.invalidate();
       saveState();
-      renderWeeklyChart(); renderDailyBets();
+      renderStats(); renderDailyBets();
       showToast('🗑️ Đã xóa dữ liệu thống kê.', 'info');
     });
 }
@@ -3757,11 +3925,11 @@ function renderWeeklyNav() {
   const curIdx = weeks.findIndex(w => formatDateInput(w) === selKey);
 
   if (prevBtn) {
-    prevBtn.disabled = (curIdx <= 0 && qi === 0);
+    prevBtn.disabled = addDays(monday, -7).getFullYear() < 2020;
   }
 
   if (nextBtn) {
-    const isAtLatest = (selKey === nowKey) || (curIdx >= weeks.length - 1 && qi >= 3) || (curIdx >= 0 && weeks[curIdx] >= currentMonday);
+    const isAtLatest = monday >= currentMonday;
     nextBtn.disabled = isAtLatest;
   }
 
@@ -3772,21 +3940,8 @@ function renderWeeklyNav() {
 
 function prevWeek() {
   const monday = getSelectedWeekMonday();
-  const year = getYearForWeek(monday);
-  const qi = getQuarterIndexForWeek(monday);
-  const weeks = getQuarterWeeks(year, qi);
-  const selKey = formatDateInput(monday);
-  const idx = weeks.findIndex(w => formatDateInput(w) === selKey);
-
-  if (idx > 0) {
-    selectedWeekMonday = weeks[idx - 1];
-  } else if (qi > 0) {
-    const prevWeeks = getQuarterWeeks(year, qi - 1);
-    selectedWeekMonday = prevWeeks[prevWeeks.length - 1];
-  } else if (year > 2020) {
-    const prevWeeks = getQuarterWeeks(year - 1, 3);
-    selectedWeekMonday = prevWeeks[prevWeeks.length - 1];
-  }
+  const previous = addDays(monday, -7);
+  if (previous.getFullYear() >= 2020) selectedWeekMonday = previous;
   SoundEngine.click();
   renderStats();
 }
@@ -3794,19 +3949,7 @@ function prevWeek() {
 function nextWeek() {
   const currentMonday = getWeekStart(new Date());
   const monday = getSelectedWeekMonday();
-  const year = getYearForWeek(monday);
-  const qi = getQuarterIndexForWeek(monday);
-  const weeks = getQuarterWeeks(year, qi);
-  const selKey = formatDateInput(monday);
-  const idx = weeks.findIndex(w => formatDateInput(w) === selKey);
-
-  let nextMon = null;
-  if (idx >= 0 && idx < weeks.length - 1) {
-    nextMon = weeks[idx + 1];
-  } else if (qi < 3) {
-    const nextWeeks = getQuarterWeeks(year, qi + 1);
-    nextMon = nextWeeks[0];
-  }
+  const nextMon = addDays(monday, 7);
 
   if (nextMon && nextMon <= currentMonday) {
     selectedWeekMonday = nextMon;
@@ -3934,8 +4077,8 @@ function renderMonthPanel() {
   let active = 0;
   for (let i = 1; i <= daysInMonth; i++) if (Stats.minsAt(new Date(y, m, i)) > 0) active++;
   const avgDay = active > 0 ? total / active : 0;
-  const cmp = Stats.compare('month');
-  const ytd = Stats.compareYearToDate(y, y - 1, new Date(y, m, now.getDate()));
+  const throughDay = currentMonthOffset === 0 ? now.getDate() : daysInMonth;
+  const ytd = Stats.compareMonthYears(y, m, throughDay);
 
   body.innerHTML = `
     <div class="month-nav">
@@ -4188,8 +4331,8 @@ const Export = {
     [...state.sessions]
       .sort((a, b) => new Date(a.date) - new Date(b.date))
       .forEach(s => {
-        const st = new Date(s.date);
-        const en = new Date(st.getTime() + (s.durationMins || 0) * 60000);
+        const en = new Date(s.endTime || s.date);
+        const st = new Date(s.startTime || (en.getTime() - (s.durationMins || 0) * 60000));
         lines.push('BEGIN:VEVENT',
           `UID:${s.id || Math.random().toString(36).slice(2)}@momentum`,
           `DTSTAMP:${fmt(new Date())}`,
@@ -4215,7 +4358,7 @@ function generateMonthlyRecap(y, m) {
     if (v > 0) active++;
     if (v > bestDay) { bestDay = v; bestDate = `${i}/${m + 1}`; }
   }
-  const cmp = Stats.compare('month');
+  const cmp = Stats.compare('month', new Date(y, m, 1));
   const streak = Stats.streak(-1);
   return {
     year: y, month: m, total, active,
@@ -4282,26 +4425,24 @@ function renderQuarterCharts() {
 
   // weekStart → totalMins map (cho các tuần trong năm `year`)
   const weekMap = {};
-  state.sessions.forEach(s => {
-    const d = new Date(s.date);
+  Object.entries(Stats.daily()).forEach(([day, mins]) => {
+    const d = new Date(day + 'T00:00:00');
     if (d.getFullYear() !== year) return;
     const ws  = getWeekStart(d);
     const key = formatDateInput(ws);
-    weekMap[key] = (weekMap[key] || 0) + s.durationMins;
+    weekMap[key] = (weekMap[key] || 0) + mins;
   });
 
   const curWeekKey = formatDateInput(getWeekStart(new Date()));
-  let yearTotal = 0;
+  const yearTotal = Stats.yearTotal(year);
 
   QRANGE.forEach(([qStartM, qEndM], qi) => {
     const canvas = document.getElementById(`quarter-chart-${qi+1}`);
     if (!canvas) return;
 
-    const displayWeeks = getQuarterWeeks(year, qi);
-    const data = displayWeeks.map(ws => weekMap[formatDateInput(ws)] || 0);
+    const { weeks: displayWeeks, minutes: data } = Stats.quarterWeeks(year, qi);
 
     const qTotal = data.reduce((a, b) => a + b, 0);
-    yearTotal += qTotal;
 
     const totalEl = document.getElementById(`q${qi+1}-total`);
     if (totalEl) totalEl.textContent = qTotal >= 60 ? `${(qTotal/60).toFixed(1)}h` : `${qTotal}p`;
@@ -4387,7 +4528,7 @@ function renderQuarterCharts() {
       statChip(totalWeeks || '—', 'Tuần có học'),
       statChip(totalWeeks > 0 ? fmtHoursDec(yearTotal / totalWeeks) + 'h' : '—', 'TB / tuần'),
       statChip(fmtHoursDec(Stats.totalAllTime()) + 'h', 'Tích lũy mọi thời điểm'),
-      yearCmp && yearCmp.b != null ? statChip(
+      yearCmp && yearCmp.pct != null ? statChip(
         yearCmp.diff >= 0 ? '▲ ' + Math.abs(yearCmp.pct).toFixed(0) + '%' : '▼ ' + Math.abs(yearCmp.pct).toFixed(0) + '%',
         `YoY ${year} vs ${year - 1}`,
         yearCmp.diff >= 0 ? 'chip-good' : 'chip-bad'
@@ -4611,7 +4752,11 @@ function resetData() {
           // Stop any active timers
           stopTimerLoop();
           // Reset state to default
-          state = { ...DEFAULT_STATE };
+          const deletedSessions = { ...(state.deletedSessions || {}) };
+          const deletedAt = new Date().toISOString();
+          state.sessions.forEach(s => { deletedSessions[s.id] = deletedAt; });
+          state = createDefaultState();
+          state.deletedSessions = deletedSessions;
           saveState();
           // Reload all UI
           updateHeaderUI();
@@ -4630,13 +4775,11 @@ function resetData() {
 // ═══════════════════════════════════════════
 
 function getTodayStudyMins() {
-  const todayStr = formatDateInput(new Date());
-  return state.sessions
-    .filter(s => new Date(s.date).toISOString().split('T')[0] === todayStr)
-    .reduce((sum, s) => sum + (s.durationMins || 0), 0);
+  return Stats.minsAt(new Date());
 }
 
 function openEditMode() {
+  refreshSharedState();
   // Populate fields
   document.getElementById('edit-coins').value = state.coins;
 
@@ -4673,6 +4816,7 @@ function saveEditMode() {
     '✏️ Lưu thay đổi?',
     'Bạn có chắc muốn lưu các thay đổi? Thao tác này sẽ ghi đè lên dữ liệu hiện tại.',
     () => {
+      refreshSharedState();
       // ── 1. Coins ──
       const newCoins = parseInt(document.getElementById('edit-coins').value, 10);
       if (!isNaN(newCoins)) {
@@ -4697,9 +4841,13 @@ function saveEditMode() {
         if (delta !== 0) {
           const todayStr = formatDateInput(new Date());
           // Try to adjust the last today session
-          const todaySessions = state.sessions.filter(
-            s => new Date(s.date).toISOString().split('T')[0] === todayStr
-          );
+          const todaySessions = state.sessions.filter(s => {
+            let mins = 0;
+            forEachStudySlice(s, 'day', (date, n) => {
+              if (formatDateInput(date) === todayStr) mins += n;
+            });
+            return mins > 0;
+          });
           if (delta > 0) {
             // Add a correction session
             state.sessions.push({
@@ -4717,11 +4865,39 @@ function saveEditMode() {
             for (let i = todaySessions.length - 1; i >= 0 && toRemove > 0; i--) {
               const sess = state.sessions.find(s => s.id === todaySessions[i].id);
               if (sess) {
+                if (Array.isArray(sess.studySegments)) {
+                  const dayStart = new Date(todayStr + 'T00:00:00').getTime();
+                  const nextDay = new Date(dayStart); nextDay.setDate(nextDay.getDate() + 1);
+                  const dayEnd = nextDay.getTime();
+                  const kept = [];
+                  sess.studySegments.forEach(({ start, end }) => {
+                    const a = Math.max(start, dayStart), b = Math.min(end, dayEnd);
+                    const removed = Math.min(toRemove, Math.max(0, b - a) / 60000);
+                    if (removed > 0) {
+                      const cut = b - removed * 60000;
+                      if (cut > start) kept.push({ start, end: cut });
+                      if (end > b) kept.push({ start: b, end });
+                      sess.durationMins -= removed;
+                      toRemove -= removed;
+                    } else kept.push({ start, end });
+                  });
+                  sess.studySegments = kept;
+                  sess.updatedAt = new Date().toISOString();
+                  if (sess.durationMins <= 0) {
+                    state.deletedSessions = state.deletedSessions || {};
+                    state.deletedSessions[sess.id] = new Date().toISOString();
+                    state.sessions = state.sessions.filter(s => s !== sess);
+                  }
+                  continue;
+                }
                 if (sess.durationMins <= toRemove) {
                   toRemove -= sess.durationMins;
+                  state.deletedSessions = state.deletedSessions || {};
+                  state.deletedSessions[sess.id] = new Date().toISOString();
                   state.sessions = state.sessions.filter(s => s.id !== sess.id);
                 } else {
                   sess.durationMins -= toRemove;
+                  sess.updatedAt = new Date().toISOString();
                   toRemove = 0;
                 }
               }
@@ -4730,9 +4906,10 @@ function saveEditMode() {
         }
       }
 
+      Stats.invalidate();
       saveState();
       updateHeaderUI();
-      renderWeeklyChart();
+      renderStats();
       closeEditMode();
       showToast('✅ Đã lưu thay đổi thành công!', 'success');
     }
@@ -4744,9 +4921,24 @@ function saveEditMode() {
 // 12. INITIALIZATION & EVENT BINDINGS
 // ═══════════════════════════════════════════
 
+function restoreStudyUI() {
+  stopTimerLoop();
+  document.getElementById('retrospective-modal').classList.add('hidden');
+  if (state.timerSession) resumeActiveSession();
+  else if (state._pendingReward) handlePendingReward();
+  else if (!checkBlockDeadline() && state.activeBlock &&
+           state.activeBlock.completedMins < state.activeBlock.targetMins) showBreakDone();
+  else showStudySetup();
+}
+
 function resumeActiveSession() {
+  if (checkBlockDeadline()) return;
   const s = state.timerSession;
-  if (!s) return;
+  if (!s) {
+    if (state._pendingReward) handlePendingReward();
+    else if (state.activeBlock) showBreakDone();
+    return;
+  }
 
   // State cũ còn timer 'warmup' (tính năng đã xóa) → dọn dẹp
   if (s.type === 'warmup') {
@@ -4797,6 +4989,12 @@ function resumeActiveSession() {
 function handlePendingReward() {
   if (state._pendingReward) {
     const r = state._pendingReward;
+    // Migrate completed sessions saved by the older version without claiming twice.
+    if (!r.betAwarded) {
+      if (r.betWinnings > 0) addCoins(r.betWinnings, false);
+      r.betAwarded = true;
+      saveState();
+    }
     document.getElementById('session-results').innerHTML = `
       <div class="result-row">
         <span class="result-label">⏱ Tổng thời gian</span>
@@ -4947,7 +5145,7 @@ function init() {
     handlePendingReward();
   } else if (state.activeBlock && state.activeBlock.completedMins < state.activeBlock.targetMins) {
     // Was in break-done state (waiting for user to start next chunk)
-    showBreakDone();
+    if (!checkBlockDeadline()) showBreakDone();
   } else {
     if (state.activeBlock) state.activeBlock = null; // Clean up stale block
     showStudySetup();
@@ -4988,8 +5186,9 @@ function init() {
   // ── Visibility change: re-sync timer when tab becomes visible + pull from Gist ──
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) {
+      checkBlockDeadline();
       // Pull latest data from Gist silently when user returns to the tab
-      if (GistSync.isConfigured() && !state.timerSession) {
+      if (GistSync.isConfigured() && !state.timerSession && !state.activeBlock && !state._pendingReward) {
         GistSync.syncFromRemote({ silent: true });
       }
       // Resume timer if one is active
@@ -5016,7 +5215,15 @@ function init() {
 
   // ── Save state before unload ──
   window.addEventListener('beforeunload', () => {
+    refreshSharedState();
     saveState();
+  });
+  window.addEventListener('storage', event => {
+    if (event.key !== STORAGE_KEY && event.key !== null) return;
+    if (!refreshSharedState()) return;
+    restoreStudyUI();
+    updateHeaderUI();
+    renderStats();
   });
 
   // ── Settings tab buttons ──
@@ -5051,7 +5258,8 @@ function init() {
   if (bufSelect) {
     bufSelect.value = String(getDeadlineBufferMins());
     bufSelect.addEventListener('change', () => {
-      const val = parseInt(bufSelect.value, 10) || 60;
+      const parsed = parseInt(bufSelect.value, 10);
+      const val = Number.isFinite(parsed) && parsed >= 0 ? parsed : 60;
       setDeadlineBufferMins(val);
       showToast(`⏱️ Đã đặt đệm hạn giờ là ${formatDeadlineDuration(val)}!`, 'info');
       SoundEngine.click();

@@ -2516,7 +2516,9 @@ function onTimerComplete() {
   state.timerSession = null;
   startBreak(completedAt);
   if (getRemainingMs() <= 0) onTimerComplete();
-  renderWeeklyChart();
+  // Commit and refresh every statistics view as soon as each small session ends.
+  renderStats();
+  renderDailyBets();
 }
 
 function saveRetrospective() {
